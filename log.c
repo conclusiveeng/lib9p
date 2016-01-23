@@ -29,12 +29,20 @@
 #include <stdarg.h>
 #include "log.h"
 
+static const char *l9p_log_level_names[] = {
+	"DEBUG",
+	"INFO",
+	"WARN",
+	"ERROR"
+};
+
 void
 l9p_logf(enum l9p_log_level level, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
+	fprintf(stderr, "[%s]\t", l9p_log_level_names[level]);
 	vfprintf(stderr, fmt, ap);
 	fprintf(stderr, "\n");
 	va_end(ap);

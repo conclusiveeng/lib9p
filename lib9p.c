@@ -49,8 +49,6 @@ static void l9p_pudata(struct l9p_message *, uint8_t **, size_t);
 static void l9p_puqid(struct l9p_message *, struct l9p_qid *);
 static void l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q,
     size_t);
-static void l9p_pustat(struct l9p_message *, struct l9p_stat *);
-static uint16_t l9p_sizeof_stat(struct l9p_stat *);
 
 
 static void
@@ -233,7 +231,7 @@ l9p_puqids(struct l9p_message *msg, uint16_t *num, struct l9p_qid *qids,
         l9p_puqid(msg, &qids[i]);
 }
 
-static void
+void
 l9p_pustat(struct l9p_message *msg, struct l9p_stat *stat)
 {
     uint16_t size;
@@ -315,7 +313,7 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall)
             l9p_pu32(msg, &fcall->tcreate.perm);
             l9p_pu8(msg, &fcall->tcreate.mode);
             break;
-        case L9P_TREMOVE:
+        case L9P_TREAD:
             l9p_pu32(msg, &fcall->hdr.fid);
             l9p_pu64(msg, &fcall->io.offset);
             l9p_pu32(msg, &fcall->io.count);
@@ -349,9 +347,11 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall)
             break;
         }
     }
+
+    return (0);
 }
 
-static uint16_t
+uint16_t
 l9p_sizeof_stat(struct l9p_stat *stat) {
     return L9P_WORD /* size */
         + L9P_WORD /* type */

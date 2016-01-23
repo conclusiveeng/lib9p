@@ -36,13 +36,7 @@
 #include <netdb.h>
 #include "../lib9p.h"
 #include "../log.h"
-#include "socket.h"
-
-static int l9p_socket_readmsg(int, void **, size_t *);
-static void l9p_socket_sendmsg(void *, size_t, void *);
-static void *l9p_socket_thread(void *);
-static int xread(int, void *, size_t);
-static int xwrite(int, void *, size_t);
+#include "socket.h" 
 
 struct l9p_socket_softc
 {
@@ -52,6 +46,12 @@ struct l9p_socket_softc
 	pthread_t ls_thread;
 	int ls_fd;
 };
+
+static int l9p_socket_readmsg(struct l9p_socket_softc *, void **, size_t *);
+static void l9p_socket_sendmsg(void *, size_t, void *);
+static void *l9p_socket_thread(void *);
+static int xread(int, void *, size_t);
+static int xwrite(int, void *, size_t);
 
 int
 l9p_start_server(struct l9p_server *server, const char *host, const char *port)
@@ -155,20 +155,22 @@ l9p_socket_thread(void *arg)
 	size_t length;
 
 	for (;;) {
-		if (l9p_socket_readmsg(sc->ls_fd, &buf, &length) != 0)
+		if (l9p_socket_readmsg(sc, &buf, &length) != 0)
 			break;
 
 		l9p_connection_recv(sc->ls_conn, buf, length);
 	}
 
+	l9p_logf(L9P_INFO, "connection closed");
 	return (NULL);
 }
 
 static int
-l9p_socket_readmsg(int fd, void **buf, size_t *size)
+l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 {
 	uint32_t msize;
 	void *buffer;
+	int fd = sc->ls_fd;
 
 	if (xread(fd, &msize, sizeof(uint32_t)) != sizeof(uint32_t)) {
 		l9p_logf(L9P_ERROR, "short read: %s", strerror(errno));
@@ -185,7 +187,7 @@ l9p_socket_readmsg(int fd, void **buf, size_t *size)
 
 	*size = msize;
 	*buf = buffer;
-	l9p_logf(L9P_INFO, "read complete message, size=%d", msize);
+	l9p_logf(L9P_INFO, "%p: read complete message, buf=%p size=%d", sc->ls_conn, buffer, msize);
 
 	return (0);
 }
@@ -196,7 +198,9 @@ l9p_socket_sendmsg(void *buf, size_t len, void *arg)
 	struct l9p_socket_softc *sc = (struct l9p_socket_softc *)arg;
 	uint32_t msize = (uint32_t)len + sizeof(uint32_t);
 
-	if (xwrite(sc->ls_fd, &msize, sizeof(uint32_t) != sizeof(uint32_t))) {
+	l9p_logf(L9P_DEBUG, "%p: sending reply, buf=%p, size=%d", arg, buf, len);
+
+	if (xwrite(sc->ls_fd, &msize, sizeof(uint32_t)) != sizeof(uint32_t)) {
 		l9p_logf(L9P_ERROR, "short write: %s", strerror(errno));
 		return;
 	}

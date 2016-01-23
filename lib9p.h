@@ -66,6 +66,7 @@ struct l9p_request
     union l9p_fcall lr_req;
     union l9p_fcall lr_resp;
     struct l9p_openfile *lr_fid;
+    struct l9p_openfile *lr_newfid;
     struct l9p_connection *lr_conn;
     pthread_t lr_thread;
     LIST_ENTRY(l9p_request) lr_link;
@@ -117,6 +118,9 @@ struct l9p_backend
 };
 
 int l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall);
+int l9p_fustat(struct l9p_message *msg, struct l9p_stat *s);
+uint16_t l9p_sizeof_stat(struct l9p_stat *stat);
+int l9p_pack_stat(struct l9p_request *req, struct l9p_stat *s);
 
 int l9p_server_init(struct l9p_server **, struct l9p_backend *backend);
 

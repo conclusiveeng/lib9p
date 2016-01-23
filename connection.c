@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <sys/queue.h>
 #include "lib9p.h"
+#include "log.h"
 
 int
 l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend)
@@ -48,6 +49,7 @@ l9p_connection_init(struct l9p_server *server, struct l9p_connection **conn)
     struct l9p_connection *newconn;
 
     newconn = malloc(sizeof(*newconn));
+    newconn->lc_server = server;
     LIST_INSERT_HEAD(&server->ls_conns, newconn, lc_link);
     *conn = newconn;
 
@@ -83,7 +85,7 @@ l9p_connection_recv(struct l9p_connection *conn, void *buf, size_t len)
     msg.lm_mode = L9P_UNPACK;
 
     if (l9p_pufcall(&msg, &req->lr_req) != 0) {
-
+        l9p_logf(L9P_WARNING, "cannot unpack received message");
     }
 
     l9p_dispatch_request(req);

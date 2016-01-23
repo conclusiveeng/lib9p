@@ -68,7 +68,7 @@ enum l9p_ftype {
 enum l9p_qid_type
 {
     L9P_QTDIR = 0x80,	/* type bit for directories */
-    L9P_QTAPPEND	= 0x40,	/* type bit for append only files */
+    L9P_QTAPPEND = 0x40,/* type bit for append only files */
     L9P_QTEXCL = 0x20,	/* type bit for exclusive use files */
     L9P_QTMOUNT = 0x10,	/* type bit for mounted channel */
     L9P_QTAUTH = 0x08,	/* type bit for authentication file */
@@ -76,6 +76,19 @@ enum l9p_qid_type
     L9P_QTSYMLINK = 0x02,/* type bit for symbolic link */
     L9P_QTFILE = 0x00	/* type bits for plain file */
 };
+
+#define P9_DMDIR        0x80000000      /* mode bit for directories */
+#define P9_DMAPPEND     0x40000000      /* mode bit for append only files */
+#define P9_DMEXCL       0x20000000      /* mode bit for exclusive use files */
+#define P9_DMMOUNT      0x10000000      /* mode bit for mounted channel */
+#define P9_DMAUTH       0x08000000      /* mode bit for authentication file */
+#define P9_DMTMP        0x04000000      /* mode bit for non-backed-up file */
+#define P9_DMSYMLINK    0x02000000      /* mode bit for symbolic link (Unix, 9P2000.u) */
+#define P9_DMDEVICE     0x00800000      /* mode bit for device file (Unix, 9P2000.u) */
+#define P9_DMNAMEDPIPE  0x00200000      /* mode bit for named pipe (Unix, 9P2000.u) */
+#define P9_DMSOCKET     0x00100000      /* mode bit for socket (Unix, 9P2000.u) */
+#define P9_DMSETUID     0x00080000      /* mode bit for setuid (Unix, 9P2000.u) */
+#define P9_DMSETGID     0x00040000      /* mode bit for setgid (Unix, 9P2000.u) */
 
 struct l9p_hdr
 {

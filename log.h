@@ -36,6 +36,8 @@ enum l9p_log_level
 	L9P_ERROR
 };
 
-void l9p_logf(enum l9p_log_level level, const char *fmt, ...);
+void l9p_logf(enum l9p_log_level level, const char *func, const char *fmt, ...);
 
+#define	L9P_LOG(level, fmt, ...) l9p_logf(level, __func__, fmt, ##__VA_ARGS__)
+	
 #endif	/* LIB9P_LOG_H */

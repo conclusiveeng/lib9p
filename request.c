@@ -25,8 +25,11 @@
  *
  */
 
-
+#include <stdlib.h>
 #include <string.h>
+#include <sys/param.h>
+#include <sys/uio.h>
+#include <sys/sbuf.h>
 #include "lib9p.h"
 #include "fcall.h"
 #include "log.h"
@@ -46,7 +49,7 @@ static void l9p_dispatch_twalk(struct l9p_request *req);
 static void l9p_dispatch_twrite(struct l9p_request *req);
 static void l9p_dispatch_twstat(struct l9p_request *req);
 
-static struct
+static const struct
 {
     enum l9p_ftype type;
     void (*handler)(struct l9p_request *);
@@ -65,13 +68,25 @@ static struct
     {L9P_TWSTAT, l9p_dispatch_twstat}
 };
 
+static const char *l9p_versions[] = {
+    "9P2000",
+    "9P2000.u",
+    "9P2000.L"
+};
+
 void
 l9p_dispatch_request(struct l9p_request *req)
 {
     struct l9p_connection *conn = req->lr_conn;
+    struct sbuf *sb = sbuf_new_auto();
     int i;
 
-    l9p_logf(L9P_INFO, "new request of type %d", req->lr_req.hdr.type);
+    l9p_describe_fcall(&req->lr_req, L9P_2000, sb);
+    sbuf_done(sb);
+
+    L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
+    sbuf_delete(sb);
+
     req->lr_tag = req->lr_req.hdr.tag;
 
     for (i = 0; i < N(l9p_handlers); i++) {
@@ -81,6 +96,7 @@ l9p_dispatch_request(struct l9p_request *req)
         }
     }
 
+    L9P_LOG(L9P_WARNING, "unknown request of type %d", req->lr_req.hdr.type);
     l9p_respond(req, L9P_ENOFUNC);
 }
 
@@ -88,19 +104,12 @@ void
 l9p_respond(struct l9p_request *req, const char *error)
 {
     struct l9p_connection *conn = req->lr_conn;
-    struct l9p_message msg;
-    void *buf = malloc(1024 * 1024);
-
-    msg.lm_buffer = buf;
-    msg.lm_pos = buf;
-    msg.lm_end = buf + (1024 * 1024);
-    msg.lm_mode = L9P_PACK;
+    struct sbuf *sb = sbuf_new_auto();
+    size_t iosize;
 
     switch (req->lr_req.hdr.type) {
-    case L9P_TVERSION:
-        break;
-
-    case L9P_TWALK:
+    case L9P_TCLUNK:
+        l9p_connection_remove_fid(conn, req->lr_fid);
         break;
     }
 
@@ -113,43 +122,66 @@ l9p_respond(struct l9p_request *req, const char *error)
         req->lr_resp.error.ename = error;
     }
 
-    if (l9p_pufcall(&msg, &req->lr_resp) != 0) {
+    l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
+    sbuf_done(sb);
 
+    L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
+    sbuf_delete(sb);    
+
+    if (l9p_pufcall(&req->lr_resp_msg, &req->lr_resp) != 0) {
+        L9P_LOG(L9P_ERROR, "cannot pack response");
+        return;
     }
 
-    conn->lc_send_request(msg.lm_buffer, msg.lm_pos - msg.lm_buffer,
-        conn->lc_send_request_aux);
+    iosize = req->lr_resp_msg.lm_size;
+
+    /* Include I/O size in calculation for Rread response */
+    if (req->lr_resp.hdr.type == L9P_RREAD)
+        iosize += req->lr_resp.io.count;
+
+    conn->lc_send_response(req, req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
+        iosize, conn->lc_send_response_aux);
 }
 
 int
 l9p_pack_stat(struct l9p_request *req, struct l9p_stat *st)
 {
-    struct l9p_message msg;
+    struct l9p_connection *conn = req->lr_conn;
+    struct l9p_message *msg = &req->lr_readdir_msg;
     uint16_t size = l9p_sizeof_stat(st);
 
+    if (msg->lm_size == 0) {
+        /* Initialize message */
+        msg->lm_mode = L9P_PACK;
+        msg->lm_niov = req->lr_data_niov;
+        memcpy(msg->lm_iov, req->lr_data_iov, sizeof(struct iovec) * req->lr_data_niov);
+    }
+
+    if (l9p_pustat(msg, st) < 0)
+        return (-1);
+
     req->lr_resp.io.count += size;
-    req->lr_resp.io.data = realloc(req->lr_resp.io.data,
-        req->lr_resp.io.count);
-
-    msg.lm_buffer = req->lr_resp.io.data + req->lr_resp.io.count - size;
-    msg.lm_pos = req->lr_resp.io.data + req->lr_resp.io.count - size;
-    msg.lm_end = req->lr_resp.io.data + req->lr_resp.io.count;
-    msg.lm_mode = L9P_PACK;
-
-    l9p_pustat(&msg, st);
+    return (0);
 }
 
 static void
 l9p_dispatch_tversion(struct l9p_request *req)
 {
+    struct l9p_connection *conn = req->lr_conn;
+    enum l9p_version remote_version;
+
     if (!strcmp(req->lr_req.version.version, "9P"))
         req->lr_resp.version.version = "9P";
     else if (!strcmp(req->lr_req.version.version, "9P2000"))
         req->lr_resp.version.version = "9P2000";
+    else if (!strcmp(req->lr_req.version.version, "9P2000.u"))
+        req->lr_resp.version.version = "9P2000.u";
     else
         req->lr_resp.version.version = "unknown";
 
-    req->lr_resp.version.msize = 8192;
+    conn->lc_msize = MIN(req->lr_req.version.msize, conn->lc_msize);
+    conn->lc_max_io_size = conn->lc_msize - 24;
+    req->lr_resp.version.msize = conn->lc_msize;
     l9p_respond(req, NULL);
 }
 
@@ -158,11 +190,7 @@ l9p_dispatch_tattach(struct l9p_request *req)
 {
     struct l9p_connection *conn = req->lr_conn;
 
-    req->lr_fid = malloc(sizeof(struct l9p_openfile));
-    req->lr_fid->lo_fid = req->lr_req.tcreate.hdr.fid;
-    req->lr_fid->lo_conn = conn;
-    LIST_INSERT_HEAD(&conn->lc_files, req->lr_fid, lo_link);
-
+    req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.hdr.fid);
     conn->lc_server->ls_backend->attach(conn->lc_server->ls_backend->softc, req);
 }
 
@@ -171,13 +199,26 @@ l9p_dispatch_tclunk(struct l9p_request *req)
 {
     struct l9p_connection *conn = req->lr_conn;
 
+    req->lr_fid = l9p_connection_find_fid(conn, req->lr_req.hdr.fid);
+    if (!req->lr_fid) {
+        l9p_respond(req, L9P_ENOFID);
+        return;
+    }
+
     conn->lc_server->ls_backend->clunk(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_tflush(struct l9p_request *req)
 {
+    struct l9p_connection *conn = req->lr_conn;
 
+    if (!conn->lc_server->ls_backend->flush) {
+        l9p_respond(req, L9P_ENOFUNC);
+        return;
+    }
+
+    conn->lc_server->ls_backend->flush(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
@@ -187,15 +228,11 @@ l9p_dispatch_tcreate(struct l9p_request *req)
     struct l9p_openfile *fid;
 
     if (l9p_connection_find_fid(conn, req->lr_req.tcreate.hdr.fid) != NULL) {
-        l9p_respond(req, "x");
+        l9p_respond(req, L9P_ENOFID);
         return;
     }
 
-    fid = malloc(sizeof(struct l9p_openfile));
-    fid->lo_fid = req->lr_req.tcreate.hdr.fid;
-    fid->lo_conn = conn;
-    LIST_INSERT_HEAD(&conn->lc_files, fid, lo_link);
-
+    req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.tattach.afid);
     conn->lc_server->ls_backend->create(conn->lc_server->ls_backend->softc, req);
 }
 
@@ -231,6 +268,9 @@ l9p_dispatch_tread(struct l9p_request *req)
         return;
     }
 
+    l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
+        req->lr_data_iov, &req->lr_data_niov, 11);
+
     conn->lc_server->ls_backend->read(conn->lc_server->ls_backend->softc, req);
 }
 
@@ -246,7 +286,18 @@ l9p_dispatch_tstat(struct l9p_request *req)
     struct l9p_connection *conn = req->lr_conn;
     struct l9p_openfile *fid;
 
+    req->lr_fid = l9p_connection_find_fid(conn, req->lr_req.twalk.hdr.fid);
+    if (!req->lr_fid) {
+        l9p_respond(req, L9P_ENOFID);
+        return;
+    }
 
+    if (!conn->lc_server->ls_backend->stat) {
+        l9p_respond(req, L9P_ENOFUNC);
+        return;
+    }
+
+    conn->lc_server->ls_backend->stat(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
@@ -262,10 +313,11 @@ l9p_dispatch_twalk(struct l9p_request *req)
     }
 
     if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
-        req->lr_newfid = malloc(sizeof(struct l9p_openfile));
-        req->lr_newfid->lo_fid = req->lr_req.twalk.newfid;
-        req->lr_newfid->lo_conn = conn;
-        LIST_INSERT_HEAD(&conn->lc_files, req->lr_newfid, lo_link);
+        req->lr_newfid = l9p_connection_alloc_fid(conn, req->lr_req.twalk.newfid);
+        if (req->lr_newfid == NULL) {
+            l9p_respond(req, L9P_ENOFID);
+            return;
+        }
     }
 
     if (!conn->lc_server->ls_backend->walk) {

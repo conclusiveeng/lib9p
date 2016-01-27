@@ -37,12 +37,12 @@ static const char *l9p_log_level_names[] = {
 };
 
 void
-l9p_logf(enum l9p_log_level level, const char *fmt, ...)
+l9p_logf(enum l9p_log_level level, const char *func, const char *fmt, ...)
 {
 	va_list ap;
 
 	va_start(ap, fmt);
-	fprintf(stderr, "[%s]\t", l9p_log_level_names[level]);
+	fprintf(stderr, "[%s]\t %s: ", l9p_log_level_names[level], func);
 	vfprintf(stderr, fmt, ap);
 	fprintf(stderr, "\n");
 	va_end(ap);

@@ -33,6 +33,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/event.h>
+#include <sys/uio.h>
 #include <netdb.h>
 #include "../lib9p.h"
 #include "../log.h"
@@ -48,7 +49,10 @@ struct l9p_socket_softc
 };
 
 static int l9p_socket_readmsg(struct l9p_socket_softc *, void **, size_t *);
-static void l9p_socket_sendmsg(void *, size_t, void *);
+static int l9p_socket_get_response_buffer(struct l9p_request *,
+    struct iovec *, size_t *, void *);
+static int l9p_socket_send_response(struct l9p_request *, const struct iovec *,
+    const size_t, const size_t, void *);
 static void *l9p_socket_thread(void *);
 static int xread(int, void *, size_t);
 static int xwrite(int, void *, size_t);
@@ -105,7 +109,7 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 			    &client_addr_len);
 
 			if (news < 0) {
-				l9p_logf(L9P_WARNING, "accept(): %s", strerror(errno));
+				L9P_LOG(L9P_WARNING, "accept(): %s", strerror(errno));
 				continue;
 			}
 
@@ -130,20 +134,22 @@ l9p_socket_accept(struct l9p_server *server, int conn_fd,
 	    NI_MAXSERV, NI_NUMERICHOST | NI_NUMERICSERV);
 
 	if (err != 0) {
-		l9p_logf(L9P_WARNING, "cannot look up client name: %s",
+		L9P_LOG(L9P_WARNING, "cannot look up client name: %s",
 		    gai_strerror(err));
 	} else
-		l9p_logf(L9P_INFO, "new connection from %s:%s", host, serv);
+		L9P_LOG(L9P_INFO, "new connection from %s:%s", host, serv);
 
 	if (l9p_connection_init(server, &conn) != 0) {
-		l9p_logf(L9P_ERROR, "cannot create new connection");
+		L9P_LOG(L9P_ERROR, "cannot create new connection");
+		return;
 	}
 
-	sc = malloc(sizeof(sc));
+	sc = calloc(1, sizeof(sc));
 	sc->ls_conn = conn;
 	sc->ls_fd = conn_fd;
 
-	l9p_connection_on_send_request(conn, l9p_socket_sendmsg, sc);
+	l9p_connection_on_send_response(conn, l9p_socket_send_response, sc);
+	l9p_connection_on_get_response_buffer(conn, l9p_socket_get_response_buffer, sc);
 	pthread_create(&sc->ls_thread, NULL, l9p_socket_thread, sc);
 }
 
@@ -151,6 +157,7 @@ static void *
 l9p_socket_thread(void *arg)
 {	
 	struct l9p_socket_softc *sc = (struct l9p_socket_softc *)arg;
+	struct iovec iov;
 	void *buf;
 	size_t length;
 
@@ -158,10 +165,12 @@ l9p_socket_thread(void *arg)
 		if (l9p_socket_readmsg(sc, &buf, &length) != 0)
 			break;
 
-		l9p_connection_recv(sc->ls_conn, buf, length);
+		iov.iov_base = buf;
+		iov.iov_len = length;
+		l9p_connection_recv(sc->ls_conn, &iov, 1, NULL);
 	}
 
-	l9p_logf(L9P_INFO, "connection closed");
+	L9P_LOG(L9P_INFO, "connection closed");
 	return (NULL);
 }
 
@@ -169,46 +178,63 @@ static int
 l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 {
 	uint32_t msize;
+	uint32_t toread;
 	void *buffer;
 	int fd = sc->ls_fd;
 
-	if (xread(fd, &msize, sizeof(uint32_t)) != sizeof(uint32_t)) {
-		l9p_logf(L9P_ERROR, "short read: %s", strerror(errno));
+	buffer = malloc(sizeof(uint32_t));
+
+	if (xread(fd, buffer, sizeof(uint32_t)) != sizeof(uint32_t)) {
+		L9P_LOG(L9P_ERROR, "short read: %s", strerror(errno));
 		return (-1);
 	}
 
-	msize -= sizeof(msize);
-	buffer = malloc(msize);
+	msize = *(uint32_t *)buffer;
+	toread = msize - sizeof(uint32_t);
+	buffer = realloc(buffer, msize);
 
-	if (xread(fd, buffer, msize) != msize) {
-		l9p_logf(L9P_ERROR, "short read: %s", strerror(errno));
+	if (xread(fd, buffer + sizeof(uint32_t), toread) != toread) {
+		L9P_LOG(L9P_ERROR, "short read: %s", strerror(errno));
 		return (-1);
 	}
 
 	*size = msize;
 	*buf = buffer;
-	l9p_logf(L9P_INFO, "%p: read complete message, buf=%p size=%d", sc->ls_conn, buffer, msize);
+	L9P_LOG(L9P_INFO, "%p: read complete message, buf=%p size=%d", sc->ls_conn, buffer, msize);
 
 	return (0);
 }
 
-static void
-l9p_socket_sendmsg(void *buf, size_t len, void *arg)
+static int
+l9p_socket_get_response_buffer(struct l9p_request *req, struct iovec *iov,
+    size_t *niovp, void *arg)
+{
+	size_t size = req->lr_conn->lc_msize;
+	void *buf;
+
+	buf = malloc(size);
+	iov[0].iov_base = buf;
+	iov[0].iov_len = size;
+
+	*niovp = 1;
+	return (0);
+}
+
+static int
+l9p_socket_send_response(struct l9p_request *req, const struct iovec *iov,
+    const size_t niov, const size_t iolen, void *arg)
 {
 	struct l9p_socket_softc *sc = (struct l9p_socket_softc *)arg;
-	uint32_t msize = (uint32_t)len + sizeof(uint32_t);
 
-	l9p_logf(L9P_DEBUG, "%p: sending reply, buf=%p, size=%d", arg, buf, len);
+	L9P_LOG(L9P_DEBUG, "%p: sending reply, buf=%p, size=%d", arg,
+	    iov[0].iov_base, iolen);
 
-	if (xwrite(sc->ls_fd, &msize, sizeof(uint32_t)) != sizeof(uint32_t)) {
-		l9p_logf(L9P_ERROR, "short write: %s", strerror(errno));
-		return;
+	if (xwrite(sc->ls_fd, iov[0].iov_base, iolen) != iolen) {
+		L9_LOG(L9P_ERROR, "short write: %s", strerror(errno));
+		return (-1);
 	}
 
-	if (xwrite(sc->ls_fd, buf, len) != len) {
-		l9p_logf(L9P_ERROR, "short write: %s", strerror(errno));
-		return;
-	}
+	return (0);
 }
 
 static int

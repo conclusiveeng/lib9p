@@ -193,8 +193,7 @@ struct l9p_f_io
 struct l9p_f_rstat
 {
     struct l9p_hdr hdr;
-    uint16_t nstat;
-    uint8_t *stat;
+    struct l9p_stat stat;
 };
 
 struct l9p_f_twstat
@@ -224,4 +223,4 @@ union l9p_fcall
     struct l9p_f_io io;
 };
 
-#endif //LIB9P_FCALL_H
+#endif  /* LIB9P_FCALL_H */

@@ -230,7 +230,7 @@ l9p_socket_send_response(struct l9p_request *req, const struct iovec *iov,
 	    iov[0].iov_base, iolen);
 
 	if (xwrite(sc->ls_fd, iov[0].iov_base, iolen) != iolen) {
-		L9_LOG(L9P_ERROR, "short write: %s", strerror(errno));
+		L9P_LOG(L9P_ERROR, "short write: %s", strerror(errno));
 		return (-1);
 	}
 

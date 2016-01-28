@@ -40,9 +40,9 @@
 #define L9P_DEFAULT_MSIZE   8192
 #define L9P_MAX_IOV         8
 
-#define L9P_ENOFID      "FID does not exist"
-#define L9P_ENOFUNC     "Function not implemented"
-#define L9P_EINTR       "Interrupted"
+#define L9P_ENOFID          "FID does not exist"
+#define L9P_ENOFUNC         "Function not implemented"
+#define L9P_EINTR           "Interrupted"
 
 struct l9p_request;
 
@@ -68,9 +68,10 @@ enum l9p_integer_type
 
 enum l9p_version
 {
-    L9P_2000 = 1,
-    L9P_2000U = 2,
-    L9P_2000L = 3
+    L9P_2000 = 0,
+    L9P_2000U = 1,
+    L9P_2000L = 2,
+    L9P_INVALID_VERSION = 3
 };
 
 struct l9p_message
@@ -152,9 +153,11 @@ struct l9p_backend
     void (*freefid)(void *, struct l9p_openfile *);
 };
 
-int l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall);
-int l9p_pustat(struct l9p_message *msg, struct l9p_stat *s);
-uint16_t l9p_sizeof_stat(struct l9p_stat *stat);
+int l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
+    enum l9p_version version);
+int l9p_pustat(struct l9p_message *msg, struct l9p_stat *s,
+    enum l9p_version version);
+uint16_t l9p_sizeof_stat(struct l9p_stat *stat, enum l9p_version version);
 int l9p_pack_stat(struct l9p_request *req, struct l9p_stat *s);
 
 int l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend);
@@ -177,7 +180,9 @@ void l9p_connection_remove_fid(struct l9p_connection *conn,
     struct l9p_openfile *fid);
 struct l9p_request *l9p_connection_find_tag(struct l9p_connection *conn,
     uint32_t tag);
-void l9p_respond(struct l9p_request *req, const char *error);
+
+void l9p_dispatch_request(struct l9p_request *req);
+void l9p_respond(struct l9p_request *req, int errnum);
 
 void l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,
     size_t *niov2, size_t seek);

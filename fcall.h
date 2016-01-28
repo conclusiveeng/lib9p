@@ -77,22 +77,25 @@ enum l9p_qid_type
     L9P_QTFILE = 0x00	/* type bits for plain file */
 };
 
-#define P9_DMDIR        0x80000000      /* mode bit for directories */
-#define P9_DMAPPEND     0x40000000      /* mode bit for append only files */
-#define P9_DMEXCL       0x20000000      /* mode bit for exclusive use files */
-#define P9_DMMOUNT      0x10000000      /* mode bit for mounted channel */
-#define P9_DMAUTH       0x08000000      /* mode bit for authentication file */
-#define P9_DMTMP        0x04000000      /* mode bit for non-backed-up file */
-#define P9_DMSYMLINK    0x02000000      /* mode bit for symbolic link (Unix, 9P2000.u) */
-#define P9_DMDEVICE     0x00800000      /* mode bit for device file (Unix, 9P2000.u) */
-#define P9_DMNAMEDPIPE  0x00200000      /* mode bit for named pipe (Unix, 9P2000.u) */
-#define P9_DMSOCKET     0x00100000      /* mode bit for socket (Unix, 9P2000.u) */
-#define P9_DMSETUID     0x00080000      /* mode bit for setuid (Unix, 9P2000.u) */
-#define P9_DMSETGID     0x00040000      /* mode bit for setgid (Unix, 9P2000.u) */
+enum {
+        L9P_DMDIR =            0x80000000,
+        L9P_DMAPPEND =         0x40000000,
+        L9P_DMEXCL =           0x20000000,
+        L9P_DMMOUNT =          0x10000000,
+        L9P_DMAUTH =           0x08000000,
+        L9P_DMTMP =            0x04000000,
+        L9P_DMSYMLINK =        0x02000000,
+        /* 9P2000.u extensions */
+        L9P_DMDEVICE =         0x00800000,
+        L9P_DMNAMEDPIPE =      0x00200000,
+        L9P_DMSOCKET =         0x00100000,
+        L9P_DMSETUID =         0x00080000,
+        L9P_DMSETGID =         0x00040000,
+};
 
 struct l9p_hdr
 {
-    uint8_t		type;
+    uint8_t	type;
     uint16_t	tag;
     uint32_t	fid;
 };
@@ -117,6 +120,10 @@ struct l9p_stat
     char *uid;
     char *gid;
     char *muid;
+    char *extension;
+    uid_t n_uid;
+    gid_t n_gid;
+    uid_t n_muid;
 };
 
 struct l9p_f_version
@@ -136,6 +143,7 @@ struct l9p_f_error
 {
     struct l9p_hdr hdr;
     char *ename;
+    uint32_t errnum;
 };
 
 struct l9p_f_ropen
@@ -157,6 +165,7 @@ struct l9p_f_attach
     uint32_t afid;
     char *uname;
     char *aname;
+    uid_t n_uname;
 };
 
 struct l9p_f_tcreate
@@ -165,6 +174,7 @@ struct l9p_f_tcreate
     uint32_t perm;
     char *name;
     uint8_t	mode; /* +Topen */
+    char *extension;
 };
 
 struct l9p_f_twalk

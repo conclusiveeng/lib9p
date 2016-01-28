@@ -38,6 +38,7 @@ l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend)
     struct l9p_server *server;
 
     server = calloc(1, sizeof(*server));
+    server->ls_max_version = L9P_2000;
     server->ls_backend = backend;
     LIST_INIT(&server->ls_conns);
 
@@ -65,6 +66,8 @@ void
 l9p_connection_free(struct l9p_connection *conn)
 {
 
+    LIST_REMOVE(conn, lc_link);
+    free(conn);
 }
 
 void
@@ -94,6 +97,7 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
     req = calloc(1, sizeof(struct l9p_request));
     req->lr_aux = aux;
     req->lr_conn = conn;
+    LIST_INSERT_HEAD(&conn->lc_requests, req, lr_link);
 
     req->lr_req_msg.lm_mode = L9P_UNPACK;
     req->lr_req_msg.lm_niov = niov;
@@ -101,7 +105,7 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
     
     req->lr_resp_msg.lm_mode = L9P_PACK;
 
-    if (l9p_pufcall(&req->lr_req_msg, &req->lr_req) != 0){
+    if (l9p_pufcall(&req->lr_req_msg, &req->lr_req, conn->lc_version) != 0) {
         L9P_LOG(L9P_WARNING, "cannot unpack received message");
         return;
     }

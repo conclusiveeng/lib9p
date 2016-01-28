@@ -101,7 +101,7 @@ l9p_dispatch_request(struct l9p_request *req)
 }
 
 void
-l9p_respond(struct l9p_request *req, const char *error)
+l9p_respond(struct l9p_request *req, int errnum)
 {
     struct l9p_connection *conn = req->lr_conn;
     struct sbuf *sb = sbuf_new_auto();
@@ -115,11 +115,12 @@ l9p_respond(struct l9p_request *req, const char *error)
 
     req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
 
-    if (error == NULL)
+    if (errnum == 0)
         req->lr_resp.hdr.type = req->lr_req.hdr.type + 1;
     else {
         req->lr_resp.hdr.type = L9P_RERROR;
-        req->lr_resp.error.ename = error;
+        req->lr_resp.error.ename = strerror(errnum);
+	req->lr_resp.error.errnum = errnum;
     }
 
     l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
@@ -128,9 +129,9 @@ l9p_respond(struct l9p_request *req, const char *error)
     L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
     sbuf_delete(sb);    
 
-    if (l9p_pufcall(&req->lr_resp_msg, &req->lr_resp) != 0) {
+    if (l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version) != 0) {
         L9P_LOG(L9P_ERROR, "cannot pack response");
-        return;
+        goto out;
     }
 
     iosize = req->lr_resp_msg.lm_size;
@@ -139,8 +140,12 @@ l9p_respond(struct l9p_request *req, const char *error)
     if (req->lr_resp.hdr.type == L9P_RREAD)
         iosize += req->lr_resp.io.count;
 
-    conn->lc_send_response(req, req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
-        iosize, conn->lc_send_response_aux);
+    conn->lc_send_response(req, req->lr_resp_msg.lm_iov,
+        req->lr_resp_msg.lm_niov, iosize, conn->lc_send_response_aux);
+
+out:
+    LIST_REMOVE(req, lr_link);
+    free(req);
 }
 
 int
@@ -148,7 +153,7 @@ l9p_pack_stat(struct l9p_request *req, struct l9p_stat *st)
 {
     struct l9p_connection *conn = req->lr_conn;
     struct l9p_message *msg = &req->lr_readdir_msg;
-    uint16_t size = l9p_sizeof_stat(st);
+    uint16_t size = l9p_sizeof_stat(st, conn->lc_version);
 
     if (msg->lm_size == 0) {
         /* Initialize message */
@@ -157,7 +162,7 @@ l9p_pack_stat(struct l9p_request *req, struct l9p_stat *st)
         memcpy(msg->lm_iov, req->lr_data_iov, sizeof(struct iovec) * req->lr_data_niov);
     }
 
-    if (l9p_pustat(msg, st) < 0)
+    if (l9p_pustat(msg, st, conn->lc_version) < 0)
         return (-1);
 
     req->lr_resp.io.count += size;
@@ -168,19 +173,31 @@ static void
 l9p_dispatch_tversion(struct l9p_request *req)
 {
     struct l9p_connection *conn = req->lr_conn;
-    enum l9p_version remote_version;
+    enum l9p_version remote_version = L9P_INVALID_VERSION;
+    int i;
 
-    if (!strcmp(req->lr_req.version.version, "9P"))
-        req->lr_resp.version.version = "9P";
-    else if (!strcmp(req->lr_req.version.version, "9P2000"))
-        req->lr_resp.version.version = "9P2000";
-    else if (!strcmp(req->lr_req.version.version, "9P2000.u"))
-        req->lr_resp.version.version = "9P2000.u";
-    else
-        req->lr_resp.version.version = "unknown";
+    for (i = 0; i < N(l9p_versions); i++) {
+        if (strcmp(req->lr_req.version.version, l9p_versions[i]) == 0) {
+            remote_version = (enum l9p_version)i;
+            break;
+        }
+    }
 
+    if (remote_version == L9P_INVALID_VERSION) {
+        L9P_LOG(L9P_ERROR, "unsupported remote version: %s",
+            req->lr_req.version.version);
+        l9p_respond(req, L9P_ENOFUNC);
+        return;
+    }
+
+    L9P_LOG(L9P_INFO, "remote version: %s", l9p_versions[remote_version]);
+    L9P_LOG(L9P_INFO, "local version: %s",
+        l9p_versions[conn->lc_server->ls_max_version]);
+
+    conn->lc_version = MIN(remote_version, conn->lc_server->ls_max_version);
     conn->lc_msize = MIN(req->lr_req.version.msize, conn->lc_msize);
     conn->lc_max_io_size = conn->lc_msize - 24;
+    req->lr_resp.version.version = strdup(l9p_versions[conn->lc_version]);
     req->lr_resp.version.msize = conn->lc_msize;
     l9p_respond(req, NULL);
 }

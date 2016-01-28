@@ -31,11 +31,16 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <stdbool.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#include <pwd.h>
+#include <grp.h>
 #include "../lib9p.h"
 #include "../log.h"
 
@@ -81,21 +86,24 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf)
 	char *user = getenv("USER");
 	s->type = 0;
 	s->dev = 0;
-	s->qid.type = buf->st_mode&S_IFMT >> 8;
+	s->qid.type = buf->st_mode & S_IFMT >> 8;
 	s->qid.path = buf->st_ino;
 	s->qid.version = 0;
 	s->mode = buf->st_mode & 0777;
 	if (S_ISDIR(buf->st_mode)) {
-		s->mode |= P9_DMDIR;
+		s->mode |= L9P_DMDIR;
 		s->qid.type |= L9P_QTDIR;
 	}
 	s->atime = buf->st_atime;
 	s->mtime = buf->st_mtime;
 	s->length = buf->st_size;
-	s->name =name;
+	s->name = name;
 	s->uid = user;
 	s->gid = user;
 	s->muid = user;
+	s->n_uid = buf->st_uid;
+        s->n_gid = buf->st_gid;
+        s->n_muid = buf->st_uid;
 }
 
 static void
@@ -119,6 +127,7 @@ fs_clunk(void *softc, struct l9p_request *req)
 	struct stat st;
 
 	file = req->lr_fid->lo_aux;
+	assert(file != NULL);
 
 	if (file->dir)
 		closedir(file->dir);
@@ -127,44 +136,60 @@ fs_clunk(void *softc, struct l9p_request *req)
 		file->fd = -1;
 	}
 
-	l9p_respond(req, NULL);
+	l9p_respond(req, 0);
 }
 
 static void
 fs_create(void *softc, struct l9p_request *req)
 {
+	struct l9p_connection *conn = req->lr_conn;
+	struct openfile *file = req->lr_fid->lo_aux;
+	struct stat st;
 
+	assert(file != NULL);
+	
+	if (stat(file->name, &st) != 0) {
+		l9p_respond(req, errno);
+		return;
+	}
+	
+	if (req->lr_req.tcreate.mode & L9P_DMDIR) {
+		mkdir(file->name, 0777);
+		l9p_respond(req, 0);
+	} else {
+		
+	}
 }
 
 static void
 fs_flush(void *softc, struct l9p_request *req)
 {
-	l9p_respond(req, NULL);
+	l9p_respond(req, 0);
 }
 
 static void
 fs_open(void *softc, struct l9p_request *req)
 {
 	struct l9p_connection *conn = req->lr_conn;
-	struct openfile *file;
+	struct openfile *file = req->lr_fid->lo_aux;
 	struct stat st;
 
-	file = req->lr_fid->lo_aux;
-
+	assert(file != NULL);
+	
 	stat(file->name, &st);
 
-	if (S_ISDIR(st.st_mode)) {
+	if (S_ISDIR(st.st_mode))
 		file->dir = opendir(file->name);
-	} else {
+	else {
 		file->fd = open(file->name, O_RDONLY);
 		if (file->fd < 0) {
-			l9p_respond(req, "Permission denied");
+			l9p_respond(req, EACCES);
 			return;
 		}
 	}
 
 	req->lr_resp.ropen.iounit = conn->lc_max_io_size;
-	l9p_respond(req, NULL);
+	l9p_respond(req, 0);
 }
 
 static void
@@ -175,6 +200,7 @@ fs_read(void *softc, struct l9p_request *req)
 	struct l9p_stat l9stat;
 
 	file = req->lr_fid->lo_aux;
+	assert(file != NULL);
 
 	if (file->dir != NULL) {
 		struct dirent *d;
@@ -196,11 +222,12 @@ fs_read(void *softc, struct l9p_request *req)
 			break;
 		}
 	} else {
-		size_t niov = l9p_truncate_iov(req->lr_data_iov, req->lr_data_niov, req->lr_req.io.count);
+		size_t niov = l9p_truncate_iov(req->lr_data_iov,
+                    req->lr_data_niov, req->lr_req.io.count);
 		req->lr_resp.io.count = readv(file->fd, req->lr_data_iov, niov);
 	}
 
-	l9p_respond(req, NULL);
+	l9p_respond(req, 0);
 }
 
 static void
@@ -221,7 +248,7 @@ fs_stat(void *softc, struct l9p_request *req)
 	stat(file->name, &st);
 	dostat(&req->lr_resp.rstat.stat, file->name, &st);
 
-	l9p_respond(req, NULL);
+	l9p_respond(req, 0);
 }
 
 static void
@@ -239,18 +266,18 @@ fs_walk(void *softc, struct l9p_request *req)
 		strcat(name, "/");
 		strcat(name, req->lr_req.twalk.wname[i]);
 		if (stat(name, &buf) < 0){
-			l9p_respond(req, "No such file or directory");
+			l9p_respond(req, ENOENT);
 			free(name);
 			return;
 		}
-		req->lr_resp.rwalk.wqid[i].type = buf.st_mode&S_IFMT >> 8;
+		req->lr_resp.rwalk.wqid[i].type = buf.st_mode & S_IFMT >> 8;
 		req->lr_resp.rwalk.wqid[i].path = buf.st_ino;
 	}
 
 	req->lr_newfid->lo_aux = open_fid(name);
 	req->lr_resp.rwalk.nwqid = i;
 	free(name);
-	l9p_respond(req, NULL);
+	l9p_respond(req, 0);
 }
 
 static void

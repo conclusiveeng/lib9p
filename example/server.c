@@ -44,5 +44,6 @@ main(int argc, const char *argv[])
 	if (l9p_server_init(&server, fs_backend) != 0)
 		errx(1, "Cannot create server:");
 
+	server->ls_max_version = L9P_2000U;
 	l9p_start_server(server, "0.0.0.0", "564");
 }

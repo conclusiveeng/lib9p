@@ -15,7 +15,7 @@ LIB_SRCS := \
 SERVER_SRCS := \
 	example/server.c
 	
-LIB_OBJS := $(LIB_SRCS:.c=.o)
+LIB_OBJS := $(addprefix build/,$(LIB_SRCS:.c=.o))
 SERVER_OBJS := $(SERVER_SRCS:.c=.o)
 LIB := lib9p.dylib
 SERVER := server
@@ -33,6 +33,9 @@ clean:
 	
 build:
 	mkdir build
+	mkdir build/sbuf
+	mkdir build/transport
+	mkdir build/backend
 	
-.c.o:
+build/%.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

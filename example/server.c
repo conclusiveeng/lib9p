@@ -38,11 +38,14 @@ main(int argc, const char *argv[])
 	struct l9p_backend *fs_backend;
 	struct l9p_server *server;
 
+	if (argc < 2)
+		errx(1, "Usage: server <path>");
+
 	if (l9p_backend_fs_init(&fs_backend, argv[1]) != 0)
-		errx(1, "Cannot init backend:");
+		err(1, "cannot init backend");
 
 	if (l9p_server_init(&server, fs_backend) != 0)
-		errx(1, "Cannot create server:");
+		err(1, "cannot create server");
 
 	server->ls_max_version = L9P_2000U;
 	l9p_start_server(server, "0.0.0.0", "564");

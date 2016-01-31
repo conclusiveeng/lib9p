@@ -107,6 +107,9 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 	for (;;) {
 		evs = kevent(kq, NULL, 0, event, nsockets, NULL);
 		if (evs < 0) {
+			if (errno == EINTR)
+				continue;
+
 			L9P_LOG(L9P_ERROR, "kevent(): %s", strerror(errno));
 			return (-1);
 		}

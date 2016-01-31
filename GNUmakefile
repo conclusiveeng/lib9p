@@ -1,4 +1,6 @@
 CFLAGS := -Wall -Wextra -Werror -g -O0
+BUILD_DIR := build
+
 LIB_SRCS := \
 	pack.c \
 	connection.c \
@@ -15,20 +17,22 @@ SERVER_SRCS := \
 	
 LIB_OBJS := $(LIB_SRCS:.c=.o)
 SERVER_OBJS := $(SERVER_SRCS:.c=.o)
-
 LIB := lib9p.dylib
 SERVER := server
 	
-all: $(LIB) $(SERVER)
+all: build $(LIB) $(SERVER)
 	
 $(LIB): $(LIB_OBJS)
-	cc -dynamiclib $^ -o $@
+	cc -dynamiclib $^ -o build/$@
 	
-$(SERVER): $(SERVER_OBJS)
-	cc $< -o $(SERVER) -L. -l9p
+$(SERVER): $(SERVER_OBJS) $(LIB)
+	cc $< -o build/$(SERVER) -Lbuild/ -l9p
 	
 clean:
-	rm -f $(LIB_OBJS) $(SERVER_OBJS)
+	rm -rf build
+	
+build:
+	mkdir build
 	
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@

@@ -84,14 +84,19 @@ static const char *l9p_versions[] = {
 void
 l9p_dispatch_request(struct l9p_request *req)
 {
-	struct sbuf *sb = sbuf_new_auto();
+#if defined(L9P_DEBUG)
+	struct sbuf *sb;
+#endif
 	size_t i;
 
+#if defined(L9P_DEBUG)
+	sb = sbuf_new_auto();
 	l9p_describe_fcall(&req->lr_req, req->lr_conn->lc_version, sb);
 	sbuf_done(sb);
 
 	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
 	sbuf_delete(sb);
+#endif
 
 	req->lr_tag = req->lr_req.hdr.tag;
 
@@ -110,8 +115,10 @@ void
 l9p_respond(struct l9p_request *req, int errnum)
 {
 	struct l9p_connection *conn = req->lr_conn;
-	struct sbuf *sb = sbuf_new_auto();
 	size_t iosize;
+#if defined(L9P_DEBUG)
+	struc sbuf *sb;
+#endif
 
 	switch (req->lr_req.hdr.type) {
 		case L9P_TCLUNK:
@@ -138,11 +145,14 @@ l9p_respond(struct l9p_request *req, int errnum)
 		req->lr_resp.error.errnum = (uint32_t)errnum;
 	}
 
+#if defined(L9P_DEBUG)
+	sb = sbuf_new_auto();
 	l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
 	sbuf_done(sb);
 
 	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
 	sbuf_delete(sb);
+#endif
 
 	if (l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version) != 0) {
 		L9P_LOG(L9P_ERROR, "cannot pack response");

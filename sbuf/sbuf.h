@@ -37,12 +37,12 @@
 struct sbuf
 {
 	char *s_buf;
-	size_t s_size;
-	size_t s_capacity;
-	size_t s_position;
+	int s_size;
+	int s_capacity;
+	int s_position;
 };
 
-struct sbuf *sbuf_new_auto();
+struct sbuf *sbuf_new_auto(void);
 int sbuf_printf(struct sbuf *s, const char *fmt, ...);
 int sbuf_vprintf(struct sbuf *s, const char *fmt, va_list args);
 int sbuf_done(struct sbuf *s);

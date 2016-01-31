@@ -110,7 +110,7 @@ ht_remove(struct ht *h, uint32_t hash)
 {
 	struct ht_entry *entry;
 	struct ht_item *item, *tmp;
-	int slot = hash % h->ht_nentries;
+	size_t slot = hash % h->ht_nentries;
 	
 	entry = &h->ht_entries[slot];
 	

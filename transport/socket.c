@@ -56,8 +56,8 @@ static int l9p_socket_get_response_buffer(struct l9p_request *,
 static int l9p_socket_send_response(struct l9p_request *, const struct iovec *,
     const size_t, const size_t, void *);
 static void *l9p_socket_thread(void *);
-static int xread(int, void *, size_t);
-static int xwrite(int, void *, size_t);
+static ssize_t xread(int, void *, size_t);
+static ssize_t xwrite(int, void *, size_t);
 
 int
 l9p_start_server(struct l9p_server *server, const char *host, const char *port)
@@ -117,7 +117,7 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 		for (i = 0; i < evs; i++) {
 			struct sockaddr client_addr;
 			socklen_t client_addr_len;
-			int news = accept(event[i].ident, &client_addr,
+			int news = accept((int)event[i].ident, &client_addr,
 			    &client_addr_len);
 
 			if (news < 0) {
@@ -193,7 +193,7 @@ static int
 l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 {
 	uint32_t msize;
-	int toread;
+	size_t toread;
 	void *buffer;
 	int fd = sc->ls_fd;
 
@@ -210,7 +210,7 @@ l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 	toread = msize - sizeof(uint32_t);
 	buffer = realloc(buffer, msize);
 
-	if (xread(fd, buffer + sizeof(uint32_t), toread) != toread) {
+	if (xread(fd, (char *)buffer + sizeof(uint32_t), toread) != (ssize_t)toread) {
 		L9P_LOG(L9P_ERROR, "short read: %s", strerror(errno));
 		return (-1);
 	}
@@ -255,17 +255,18 @@ l9p_socket_send_response(struct l9p_request *req __unused,
 		return (-1);
 	}
 
+	free(iov[0].iov_base);
 	return (0);
 }
 
-static int
+static ssize_t
 xread(int fd, void *buf, size_t count)
 {
 	size_t done = 0;
-	int ret;
+	ssize_t ret;
 
 	while (done < count) {
-		ret = read(fd, buf + done, count - done);
+		ret = read(fd, (char *)buf + done, count - done);
 		if (ret < 0) {
 			if (errno == EINTR)
 				continue;
@@ -274,22 +275,22 @@ xread(int fd, void *buf, size_t count)
 		}
 
 		if (ret == 0)
-			return (done);
+			return ((ssize_t)done);
 
-		done += ret;
+		done += (size_t)ret;
 	}
 
-	return (done);
+	return ((ssize_t)done);
 }
 
-static int
+static ssize_t
 xwrite(int fd, void *buf, size_t count)
 {
 	size_t done = 0;
-	int ret;
+	ssize_t ret;
 
 	while (done < count) {
-		ret = write(fd, buf + done, count - done);
+		ret = write(fd, (char *)buf + done, count - done);
 		if (ret < 0) {
 			if (errno == EINTR)
 				continue;
@@ -298,10 +299,10 @@ xwrite(int fd, void *buf, size_t count)
 		}
 
 		if (ret == 0)
-			return (done);
+			return ((ssize_t)done);
 
-		done += ret;
+		done += (size_t)ret;
 	}
 
-	return (done);	
+	return ((ssize_t)done);
 }

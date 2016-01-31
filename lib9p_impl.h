@@ -59,6 +59,20 @@ l9p_calloc(size_t n, size_t size)
 	
 	return (r);
 }
+
+static inline void *
+l9p_realloc(void *ptr, size_t newsize)
+{
+	void *r = realloc(ptr, newsize);
+
+	if (r == NULL) {
+		fprintf(stderr, "cannot allocate %zd bytes: out of memory\n",
+		    newsize);
+		abort();
+	}
+
+	return (r);
+}
 #endif /* _KERNEL */
 
 #endif /* LIB9P_LIB9P_IMPL_H */

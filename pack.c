@@ -39,7 +39,7 @@
 #include "lib9p_impl.h"
 
 #define N(ary)          (sizeof(ary) / sizeof(*ary))
-#define STRING_SIZE(s)  (L9P_WORD + (s != NULL ? strlen(s) : 0))
+#define STRING_SIZE(s)  (L9P_WORD + (s != NULL ? (uint16_t)strlen(s) : 0))
 #define QID_SIZE        (L9P_BYTE + L9P_DWORD + L9P_QWORD)
 
 static int l9p_iov_io(struct l9p_message *, void *, size_t);
@@ -73,13 +73,17 @@ l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
 		size_t space = msg->lm_iov[idx].iov_len - msg->lm_cursor_offset;
 		size_t towrite = MIN(space, left);
 
-		if (msg->lm_mode == L9P_PACK)
-			memcpy(msg->lm_iov[idx].iov_base + msg->lm_cursor_offset,
-		    buffer + done, towrite);
+		if (msg->lm_mode == L9P_PACK) {
+			memcpy((char *)msg->lm_iov[idx].iov_base + 
+			    msg->lm_cursor_offset, (char *)buffer + done,
+			    towrite);
+		}
 
-		if (msg->lm_mode == L9P_UNPACK)
-			memcpy(buffer + done, msg->lm_iov[idx].iov_base +
-		    msg->lm_cursor_offset, towrite);
+		if (msg->lm_mode == L9P_UNPACK) {
+			memcpy((char *)buffer + done,
+			    (char *)msg->lm_iov[idx].iov_base +
+			    msg->lm_cursor_offset, towrite);
+		}
 
 		msg->lm_cursor_offset += towrite;
 
@@ -97,7 +101,7 @@ l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
 	}
 
 	msg->lm_size += done;
-	return (done);
+	return ((int)done);
 }
 
 static inline int
@@ -134,7 +138,7 @@ l9p_pustring(struct l9p_message *msg, char **s)
 	uint16_t len;
 
 	if (msg->lm_mode == L9P_PACK)
-		len = *s != NULL ? strlen(*s) : 0;
+		len = *s != NULL ? (uint16_t)strlen(*s) : 0;
 
 	if (l9p_pu16(msg, &len) < 0)
 		return (-1);
@@ -364,7 +368,7 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	if (msg->lm_mode == L9P_PACK) {
 		/* Rewind to the beginning */
-		uint32_t len = msg->lm_size;
+		uint32_t len = (uint32_t)msg->lm_size;
 		msg->lm_cursor_offset = 0;
 		msg->lm_cursor_iov = 0;
 
@@ -382,6 +386,48 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	}
 
 	return (0);
+}
+
+void
+l9p_freefcall(union l9p_fcall *fcall)
+{
+	uint16_t i;
+
+	switch (fcall->hdr.type) {
+	case L9P_TVERSION:
+	case L9P_RVERSION:
+		free(fcall->version.version);
+		return;
+	case L9P_TATTACH:
+		free(fcall->tattach.aname);
+		free(fcall->tattach.uname);
+		return;
+	case L9P_TWALK:
+		for (i = 0; i < fcall->twalk.nwname; i++)
+			free(fcall->twalk.wname[i]);
+		return;
+	case L9P_TCREATE:
+	case L9P_TOPEN:
+		free(fcall->tcreate.name);
+		free(fcall->tcreate.extension);
+		return;
+	case L9P_RSTAT:
+		l9p_freestat(&fcall->rstat.stat);
+		return;
+	case L9P_TWSTAT:
+		l9p_freestat(&fcall->twstat.stat);
+		return;
+	}
+}
+
+void
+l9p_freestat(struct l9p_stat *stat)
+{
+	free(stat->name);
+	free(stat->extension);
+	free(stat->uid);
+	free(stat->gid);
+	free(stat->muid);
 }
 
 uint16_t

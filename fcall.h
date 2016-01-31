@@ -78,8 +78,8 @@ enum l9p_qid_type {
 	L9P_QTFILE = 0x00 /* type bits for plain file */
 };
 
+#define L9P_DMDIR 0x80000000
 enum {
-	L9P_DMDIR = 0x80000000,
 	L9P_DMAPPEND = 0x40000000,
 	L9P_DMEXCL = 0x20000000,
 	L9P_DMMOUNT = 0x10000000,

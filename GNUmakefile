@@ -1,5 +1,11 @@
-CFLAGS := -Wall -Wextra -Werror -g -O0
-BUILD_DIR := build
+CFLAGS := \
+	-Weverything \
+	-Wno-padded \
+	-Wno-gnu-zero-variadic-macro-arguments \
+	-Wno-format-nonliteral \
+	-Werror \
+	-g \
+	-O0
 
 LIB_SRCS := \
 	pack.c \
@@ -15,6 +21,7 @@ LIB_SRCS := \
 SERVER_SRCS := \
 	example/server.c
 	
+BUILD_DIR := build
 LIB_OBJS := $(addprefix build/,$(LIB_SRCS:.c=.o))
 SERVER_OBJS := $(SERVER_SRCS:.c=.o)
 LIB := lib9p.dylib

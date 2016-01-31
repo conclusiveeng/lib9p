@@ -91,7 +91,7 @@ l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,
 	}
 
 	for (j = i; j < niov1; j++) {
-		iov2[j - i].iov_base = iov1[j].iov_base + remainder;
+		iov2[j - i].iov_base = (char *)iov1[j].iov_base + remainder;
 		iov2[j - i].iov_len = iov1[j].iov_len - remainder;
 		remainder = 0;
 	}
@@ -99,7 +99,7 @@ l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,
 	*niov2 = j - i;
 }
 
-int
+size_t
 l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length)
 {
 	size_t i, done = 0;

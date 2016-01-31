@@ -165,15 +165,22 @@ void l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
 void l9p_connection_close(struct l9p_connection *conn);
 struct l9p_openfile *l9p_connection_alloc_fid(struct l9p_connection *conn,
     uint32_t fid);
+void l9p_connection_remove_fid(struct l9p_connection *conn,
+    struct l9p_openfile *fid);
 
 void l9p_dispatch_request(struct l9p_request *req);
 void l9p_respond(struct l9p_request *req, int errnum);
 
 void l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,
     size_t *niov2, size_t seek);
-int l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length);
+size_t l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length);
 void l9p_describe_qid(struct l9p_qid *qid, struct sbuf *sb);
 void l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
     struct sbuf *sb);
+void l9p_describe_stat(struct l9p_stat *st, struct sbuf *sb);
+void l9p_freefcall(union l9p_fcall *fcall);
+void l9p_freestat(struct l9p_stat *stat);
+
+int l9p_backend_fs_init(struct l9p_backend **backendp, const char *root);
 
 #endif  /* LIB9P_LIB9P_H */

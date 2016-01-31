@@ -166,3 +166,13 @@ l9p_connection_alloc_fid(struct l9p_connection *conn, uint32_t fid)
 
 	return (file);
 }
+
+void
+l9p_connection_remove_fid(struct l9p_connection *conn, struct l9p_openfile *fid)
+{
+
+	conn->lc_server->ls_backend->freefid(conn->lc_server->ls_backend->softc,
+	    fid);
+
+	ht_remove(&conn->lc_files, fid->lo_fid);
+}

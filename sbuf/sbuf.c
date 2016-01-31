@@ -68,7 +68,7 @@ int
 sbuf_vprintf(struct sbuf *s, const char *fmt, va_list args)
 {
 	va_list copy;
-	size_t req;
+	int req;
 	
 	va_copy(copy, args);
 	req = vsnprintf(NULL, 0, fmt, copy);
@@ -76,7 +76,7 @@ sbuf_vprintf(struct sbuf *s, const char *fmt, va_list args)
 	
 	if (s->s_size + req >= s->s_capacity) {
 		s->s_capacity = s->s_size + req + 1;
-		s->s_buf = realloc(s->s_buf, s->s_capacity);
+		s->s_buf = realloc(s->s_buf, (size_t)s->s_capacity);
 	}
 	
 	req = vsnprintf(s->s_buf + s->s_size, req + 1, fmt, args);

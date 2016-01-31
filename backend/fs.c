@@ -119,10 +119,12 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool unix)
 	if (S_ISLNK(buf->st_mode) && unix)
 		s->mode |= L9P_DMSYMLINK;
 
-	s->atime = buf->st_atime;
-	s->mtime = buf->st_mtime;
-	s->length = buf->st_size;
-	s->name = name;
+	s->atime = (uint32_t)buf->st_atime;
+	s->mtime = (uint32_t)buf->st_mtime;
+	s->length = (uint64_t)buf->st_size;
+
+	/* XXX: not thread safe */
+	s->name = strdup(basename(name));
 
 	if (!unix) {
 		user = getpwuid(buf->st_uid);
@@ -148,7 +150,12 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool unix)
 				return;
 			}
 
-			s->extension = strndup(target, ret);
+			s->extension = strndup(target, (size_t)ret);
+		}
+
+		if (S_ISBLK(buf->st_mode)) {
+			asprintf(&s->extension, "b %d %d", major(buf->st_rdev),
+			    minor(buf->st_rdev));
 		}
 	}
 }
@@ -159,8 +166,14 @@ generate_qid(struct stat *buf, struct l9p_qid *qid)
 	qid->path = buf->st_ino;
 	qid->version = 0;
 
+	if (S_ISREG(buf->st_mode))
+		qid->type |= L9P_QTFILE;
+
 	if (S_ISDIR(buf->st_mode))
 		qid->type |= L9P_QTDIR;
+
+	if (S_ISLNK(buf->st_mode))
+		qid->type |= L9P_QTSYMLINK;
 }
 
 static bool
@@ -197,7 +210,7 @@ check_access(struct stat *st, uid_t uid, int amode)
 
 	/* Check for group access */
 	pwd = getpwuid(uid);
-	getgrouplist(pwd->pw_name, pwd->pw_gid, groups, &ngroups);
+	getgrouplist(pwd->pw_name, (int)pwd->pw_gid, groups, &ngroups);
 
 	for (i = 0; i < ngroups; i++) {
 		if (st->st_gid == (gid_t)groups[i]) {
@@ -253,9 +266,10 @@ fs_clunk(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
 
-	if (file->dir)
+	if (file->dir) {
 		closedir(file->dir);
-	else {
+		file->dir = NULL;
+	} else if (file->fd != -1) {
 		close(file->fd);
 		file->fd = -1;
 	}
@@ -270,6 +284,7 @@ fs_create(void *softc, struct l9p_request *req)
 	struct openfile *file = req->lr_fid->lo_aux;
 	struct stat st;
 	char *newname;
+	mode_t mode = req->lr_req.tcreate.mode & 0777;
 
 	assert(file != NULL);
 
@@ -291,12 +306,43 @@ fs_create(void *softc, struct l9p_request *req)
 	}
 
 	if (req->lr_req.tcreate.perm & L9P_DMDIR)
-		mkdir(newname, 0777);
+		mkdir(newname, mode);
 	else if (req->lr_req.tcreate.perm & L9P_DMSYMLINK)
 		symlink(req->lr_req.tcreate.extension, newname);
-	else {
+	else if (req->lr_req.tcreate.perm & L9P_DMDEVICE) {
+		char type;
+		int major, minor;
+
+		if (sscanf(req->lr_req.tcreate.extension, "%c %u %u",
+		    &type, &major, &minor) < 2) {
+			l9p_respond(req, EINVAL);
+			return;
+		}
+
+		switch (type) {
+		case 'b':
+			if (mknod(newname, S_IFBLK | mode,
+			    makedev(major, minor)) != 0)
+			{
+				l9p_respond(req, errno);
+				return;
+			}
+			break;
+		case 'c':
+			if (mknod(newname, S_IFCHR | mode,
+			    makedev(major, minor)) != 0)
+			{
+				l9p_respond(req, errno);
+				return;
+			}
+			break;
+		default:
+			l9p_respond(req, EINVAL);
+			return;
+		}
+	} else {
 		file->fd = open(newname,
-		    O_CREAT | O_TRUNC | req->lr_req.tcreate.mode,
+		    O_CREAT | O_TRUNC | mode,
 		    req->lr_req.tcreate.perm);
 	}
 
@@ -312,6 +358,7 @@ static void
 fs_flush(void *softc __unused, struct l9p_request *req)
 {
 
+	/* XXX: not used because this transport is synchronous */
 	l9p_respond(req, 0);
 }
 
@@ -354,6 +401,7 @@ fs_read(void *softc __unused, struct l9p_request *req)
 	struct openfile *file;
 	struct l9p_stat l9stat;
 	bool unix = req->lr_conn->lc_version >= L9P_2000U;
+	ssize_t ret;
 
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
@@ -380,7 +428,27 @@ fs_read(void *softc __unused, struct l9p_request *req)
 	} else {
 		size_t niov = l9p_truncate_iov(req->lr_data_iov,
                     req->lr_data_niov, req->lr_req.io.count);
-		req->lr_resp.io.count = readv(file->fd, req->lr_data_iov, niov);
+
+#if defined(__FreeBSD__)
+		ret = preadv(file->fd, req->lr_data_iov, niov,
+		    req->lr_req.io.offset);
+#else
+		/* XXX: not thread safe, should really use aio_listio. */
+		if (lseek(file->fd, (off_t)req->lr_req.io.offset, SEEK_SET) < 0)
+		{
+			l9p_respond(req, errno);
+			return;
+		}
+
+		ret = (uint32_t)readv(file->fd, req->lr_data_iov, (int)niov);
+#endif
+
+		if (ret < 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+
+		req->lr_resp.io.count = (uint32_t)ret;
 	}
 
 	l9p_respond(req, 0);
@@ -438,7 +506,7 @@ fs_stat(void *softc __unused, struct l9p_request *req)
 static void
 fs_walk(void *softc __unused, struct l9p_request *req)
 {
-	int i;
+	uint16_t i;
 	struct stat buf;
 	struct openfile *file = req->lr_fid->lo_aux;
 	struct openfile *newfile;
@@ -446,7 +514,6 @@ fs_walk(void *softc __unused, struct l9p_request *req)
 
 	strcpy(name, file->name);
 
-	/* build full path. Stat full path. Done */
 	for (i = 0; i < req->lr_req.twalk.nwname; i++) {
 		strcat(name, "/");
 		strcat(name, req->lr_req.twalk.wname[i]);
@@ -470,6 +537,7 @@ fs_write(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
 	struct openfile *file;
+	ssize_t ret;
 
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
@@ -482,7 +550,26 @@ fs_write(void *softc, struct l9p_request *req)
 	size_t niov = l9p_truncate_iov(req->lr_data_iov,
             req->lr_data_niov, req->lr_req.io.count);
 	
-	req->lr_resp.io.count = writev(file->fd, req->lr_data_iov, niov);
+#if defined(__FreeBSD__)
+	ret = pwritev(file->fd, req->lr_data_iov, niov,
+	    req->lr_req.io.offset);
+#else
+	/* XXX: not thread safe, should really use aio_listio. */
+	if (lseek(file->fd, (off_t)req->lr_req.io.offset, SEEK_SET) < 0) {
+		l9p_respond(req, errno);
+		return;
+	}
+
+	ret = writev(file->fd, req->lr_data_iov,
+	    (int)niov);
+#endif
+
+	if (ret < 0) {
+		l9p_respond(req, errno);
+		return;
+	}
+
+	req->lr_resp.io.count = (uint32_t)ret;
 	l9p_respond(req, 0);
 }
 
@@ -492,17 +579,33 @@ fs_wstat(void *softc, struct l9p_request *req)
 	struct fs_softc *sc = softc;
 	struct openfile *file;
 	struct l9p_stat *l9stat = &req->lr_req.twstat.stat;
-	
+
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
-	
+
+	/*
+	 * XXX:
+	 * 
+	 * stat(9P) sez:
+	 * 
+	 * Either all the changes in wstat request happen, or none of them
+	 * does: if the request succeeds, all changes were made; if it fails,
+	 * none were.
+	 * 
+	 * Atomicity is clearly missing in current implementation.
+	 */
+
 	if (sc->fs_readonly) {
 		l9p_respond(req, EROFS);
 		return;
 	}
 
 	if (l9stat->atime != (uint32_t)~0) {
-		
+		/* XXX: not implemented, ignore */
+	}
+
+	if (l9stat->mtime != (uint32_t)~0) {
+		/* XXX: not implemented, ignore */
 	}
 
 	if (l9stat->dev != (uint32_t)~0) {
@@ -511,18 +614,38 @@ fs_wstat(void *softc, struct l9p_request *req)
 	}
 
 	if (l9stat->length != (uint64_t)~0) {
+		if (file->dir != NULL) {
+			l9p_respond(req, EINVAL);
+			return;
+		}
 		
+		if (truncate(file->name, (off_t)l9stat->length) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
 	}
 
 	if (l9stat->n_uid != (uid_t)~0) {
-		
+		/* XXX: not implemented */
+		l9p_respond(req, ENOSYS);
+		return;
 	}
 
 	if (l9stat->n_gid != (uid_t)~0) {
-		
+		/* XXX: not implemented */
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	if (l9stat->mode != (uint32_t)~0) {
+		if (chmod(file->name, l9stat->mode & 0777) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
 	}
 
 	if (strlen(l9stat->name) > 0) {
+		/* XXX: not thread safe */
 		char *dir = dirname(file->name);
 		char *newname;
 		
@@ -536,9 +659,23 @@ fs_wstat(void *softc, struct l9p_request *req)
 }
 
 static void
-fs_freefid(void *softc __unused, struct l9p_openfile *f __unused)
+fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
+	struct openfile *f = fid->lo_aux;
 
+	if (f == NULL) {
+		/* Nothing to do here */
+		return;
+	}
+
+	if (f->fd != -1)
+		close(f->fd);
+
+	if (f->dir)
+		closedir(f->dir);
+
+	free(f->name);
+	free(f);
 }
 
 int

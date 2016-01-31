@@ -117,13 +117,13 @@ l9p_respond(struct l9p_request *req, int errnum)
 		case L9P_TCLUNK:
 		case L9P_TREMOVE:
 			if (req->lr_fid != NULL)
-				ht_remove(&conn->lc_files, req->lr_fid->lo_fid);
+				l9p_connection_remove_fid(conn, req->lr_fid);
 			break;
 
 		case L9P_TWALK:
 			if (errnum != 0 && req->lr_newfid != NULL &&
 			    req->lr_newfid != req->lr_fid)
-				ht_remove(&conn->lc_files, req->lr_newfid->lo_fid);
+				l9p_connection_remove_fid(conn, req->lr_newfid);
 
 			break;
 	}
@@ -135,7 +135,7 @@ l9p_respond(struct l9p_request *req, int errnum)
 	else {
 		req->lr_resp.hdr.type = L9P_RERROR;
 		req->lr_resp.error.ename = strerror(errnum);
-		req->lr_resp.error.errnum = errnum;
+		req->lr_resp.error.errnum = (uint32_t)errnum;
 	}
 
 	l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
@@ -159,6 +159,8 @@ l9p_respond(struct l9p_request *req, int errnum)
 	    req->lr_resp_msg.lm_niov, iosize, conn->lc_send_response_aux);
 
 out:
+	l9p_freefcall(&req->lr_req);
+	l9p_freefcall(&req->lr_resp);
 	free(req);
 }
 
@@ -177,13 +179,18 @@ l9p_pack_stat(struct l9p_request *req, struct l9p_stat *st)
 		    sizeof (struct iovec) * req->lr_data_niov);
 	}
 	
-	if (req->lr_resp.io.count + size > req->lr_req.io.count)
+	if (req->lr_resp.io.count + size > req->lr_req.io.count) {
+		l9p_freestat(st);
 		return (-1);
+	}
 
-	if (l9p_pustat(msg, st, conn->lc_version) < 0)
+	if (l9p_pustat(msg, st, conn->lc_version) < 0) {
+		l9p_freestat(st);
 		return (-1);
+	}
 
 	req->lr_resp.io.count += size;
+	l9p_freestat(st);
 	return (0);
 }
 

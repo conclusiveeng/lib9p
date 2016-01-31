@@ -40,10 +40,13 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/queue.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <dirent.h>
 #include <pwd.h>
 #include <grp.h>
 #include <libgen.h>
+#include <sys/socket.h>
 #include "../lib9p.h"
 #include "../lib9p_impl.h"
 #include "../log.h"
@@ -121,6 +124,12 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
 
 	if (S_ISCHR(buf->st_mode) || S_ISBLK(buf->st_mode))
 		s->mode |= L9P_DMDEVICE;
+
+	if (S_ISSOCK(buf->st_mode))
+		s->mode |= L9P_DMSOCKET;
+
+	if (S_ISFIFO(buf->st_mode))
+		s->mode |= L9P_DMNAMEDPIPE;
 
 	s->atime = (uint32_t)buf->st_atime;
 	s->mtime = (uint32_t)buf->st_mtime;
@@ -315,9 +324,39 @@ fs_create(void *softc, struct l9p_request *req)
 
 	if (req->lr_req.tcreate.perm & L9P_DMDIR)
 		mkdir(newname, mode);
-	else if (req->lr_req.tcreate.perm & L9P_DMSYMLINK)
-		symlink(req->lr_req.tcreate.extension, newname);
-	else if (req->lr_req.tcreate.perm & L9P_DMDEVICE) {
+	else if (req->lr_req.tcreate.perm & L9P_DMSYMLINK) {
+		if (symlink(req->lr_req.tcreate.extension, newname) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+	} else if (req->lr_req.tcreate.perm & L9P_DMNAMEDPIPE) {
+		if (mkfifo(newname, mode) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+	} else if (req->lr_req.tcreate.perm & L9P_DMSOCKET) {
+		struct sockaddr_un sun;
+		int s = socket(AF_UNIX, SOCK_STREAM, 0);
+
+		if (s < 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+
+		sun.sun_family = AF_UNIX;
+		sun.sun_len = sizeof(struct sockaddr_un);
+		strncpy(sun.sun_path, newname, sizeof(sun.sun_path));
+
+		if (bind(s, (struct sockaddr *)&sun, sun.sun_len) < 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+
+		if (close(s) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+	} else if (req->lr_req.tcreate.perm & L9P_DMDEVICE) {
 		char type;
 		int major, minor;
 

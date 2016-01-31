@@ -27,11 +27,18 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/param.h>
 #include <sys/uio.h>
+#if defined(__FreeBSD__)
 #include <sys/sbuf.h>
+#else
+#include "sbuf/sbuf.h"
+#endif
 #include "lib9p.h"
+#include "lib9p_impl.h"
 #include "fcall.h"
+#include "hashtable.h"
 #include "log.h"
 
 #define N(x)    (sizeof(x) / sizeof(x[0]))
@@ -51,308 +58,365 @@ static void l9p_dispatch_twstat(struct l9p_request *req);
 
 static const struct
 {
-    enum l9p_ftype type;
-    void (*handler)(struct l9p_request *);
+	enum l9p_ftype type;
+	void (*handler)(struct l9p_request *);
 } l9p_handlers[] = {
-    {L9P_TVERSION, l9p_dispatch_tversion},
-    {L9P_TATTACH, l9p_dispatch_tattach},
-    {L9P_TCLUNK, l9p_dispatch_tclunk},
-    {L9P_TFLUSH, l9p_dispatch_tflush},
-    {L9P_TCREATE, l9p_dispatch_tcreate},
-    {L9P_TOPEN, l9p_dispatch_topen},
-    {L9P_TREAD, l9p_dispatch_tread},
-    {L9P_TWRITE, l9p_dispatch_twrite},
-    {L9P_TREMOVE, l9p_dispatch_tremove},
-    {L9P_TSTAT, l9p_dispatch_tstat},
-    {L9P_TWALK, l9p_dispatch_twalk},
-    {L9P_TWSTAT, l9p_dispatch_twstat}
+	{L9P_TVERSION, l9p_dispatch_tversion},
+	{L9P_TATTACH, l9p_dispatch_tattach},
+	{L9P_TCLUNK, l9p_dispatch_tclunk},
+	{L9P_TFLUSH, l9p_dispatch_tflush},
+	{L9P_TCREATE, l9p_dispatch_tcreate},
+	{L9P_TOPEN, l9p_dispatch_topen},
+	{L9P_TREAD, l9p_dispatch_tread},
+	{L9P_TWRITE, l9p_dispatch_twrite},
+	{L9P_TREMOVE, l9p_dispatch_tremove},
+	{L9P_TSTAT, l9p_dispatch_tstat},
+	{L9P_TWALK, l9p_dispatch_twalk},
+	{L9P_TWSTAT, l9p_dispatch_twstat}
 };
 
 static const char *l9p_versions[] = {
-    "9P2000",
-    "9P2000.u",
-    "9P2000.L"
+	"9P2000",
+	"9P2000.u",
+	"9P2000.L"
 };
 
 void
 l9p_dispatch_request(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct sbuf *sb = sbuf_new_auto();
-    int i;
+	struct sbuf *sb = sbuf_new_auto();
+	size_t i;
 
-    l9p_describe_fcall(&req->lr_req, L9P_2000, sb);
-    sbuf_done(sb);
+	l9p_describe_fcall(&req->lr_req, req->lr_conn->lc_version, sb);
+	sbuf_done(sb);
 
-    L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
-    sbuf_delete(sb);
+	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
+	sbuf_delete(sb);
 
-    req->lr_tag = req->lr_req.hdr.tag;
+	req->lr_tag = req->lr_req.hdr.tag;
 
-    for (i = 0; i < N(l9p_handlers); i++) {
-        if (req->lr_req.hdr.type == l9p_handlers[i].type) {
-            l9p_handlers[i].handler(req);
-            return;
-        }
-    }
+	for (i = 0; i < N(l9p_handlers); i++) {
+		if (req->lr_req.hdr.type == l9p_handlers[i].type) {
+			l9p_handlers[i].handler(req);
+			return;
+		}
+	}
 
-    L9P_LOG(L9P_WARNING, "unknown request of type %d", req->lr_req.hdr.type);
-    l9p_respond(req, L9P_ENOFUNC);
+	L9P_LOG(L9P_WARNING, "unknown request of type %d", req->lr_req.hdr.type);
+	l9p_respond(req, ENOSYS);
 }
 
 void
 l9p_respond(struct l9p_request *req, int errnum)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct sbuf *sb = sbuf_new_auto();
-    size_t iosize;
+	struct l9p_connection *conn = req->lr_conn;
+	struct sbuf *sb = sbuf_new_auto();
+	size_t iosize;
 
-    switch (req->lr_req.hdr.type) {
-    case L9P_TCLUNK:
-        l9p_connection_remove_fid(conn, req->lr_fid);
-        break;
-    }
+	switch (req->lr_req.hdr.type) {
+		case L9P_TCLUNK:
+		case L9P_TREMOVE:
+			if (req->lr_fid != NULL)
+				ht_remove(&conn->lc_files, req->lr_fid->lo_fid);
+			break;
 
-    req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
+		case L9P_TWALK:
+			if (errnum != 0 && req->lr_newfid != NULL &&
+			    req->lr_newfid != req->lr_fid)
+				ht_remove(&conn->lc_files, req->lr_newfid->lo_fid);
 
-    if (errnum == 0)
-        req->lr_resp.hdr.type = req->lr_req.hdr.type + 1;
-    else {
-        req->lr_resp.hdr.type = L9P_RERROR;
-        req->lr_resp.error.ename = strerror(errnum);
-	req->lr_resp.error.errnum = errnum;
-    }
+			break;
+	}
 
-    l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
-    sbuf_done(sb);
+	req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
 
-    L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
-    sbuf_delete(sb);    
+	if (errnum == 0)
+		req->lr_resp.hdr.type = req->lr_req.hdr.type + 1;
+	else {
+		req->lr_resp.hdr.type = L9P_RERROR;
+		req->lr_resp.error.ename = strerror(errnum);
+		req->lr_resp.error.errnum = errnum;
+	}
 
-    if (l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version) != 0) {
-        L9P_LOG(L9P_ERROR, "cannot pack response");
-        goto out;
-    }
+	l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
+	sbuf_done(sb);
 
-    iosize = req->lr_resp_msg.lm_size;
+	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
+	sbuf_delete(sb);
 
-    /* Include I/O size in calculation for Rread response */
-    if (req->lr_resp.hdr.type == L9P_RREAD)
-        iosize += req->lr_resp.io.count;
+	if (l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version) != 0) {
+		L9P_LOG(L9P_ERROR, "cannot pack response");
+		goto out;
+	}
 
-    conn->lc_send_response(req, req->lr_resp_msg.lm_iov,
-        req->lr_resp_msg.lm_niov, iosize, conn->lc_send_response_aux);
+	iosize = req->lr_resp_msg.lm_size;
+
+	/* Include I/O size in calculation for Rread response */
+	if (req->lr_resp.hdr.type == L9P_RREAD)
+		iosize += req->lr_resp.io.count;
+
+	conn->lc_send_response(req, req->lr_resp_msg.lm_iov,
+	    req->lr_resp_msg.lm_niov, iosize, conn->lc_send_response_aux);
 
 out:
-    LIST_REMOVE(req, lr_link);
-    free(req);
+	free(req);
 }
 
 int
 l9p_pack_stat(struct l9p_request *req, struct l9p_stat *st)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct l9p_message *msg = &req->lr_readdir_msg;
-    uint16_t size = l9p_sizeof_stat(st, conn->lc_version);
+	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_message *msg = &req->lr_readdir_msg;
+	uint16_t size = l9p_sizeof_stat(st, conn->lc_version);
 
-    if (msg->lm_size == 0) {
-        /* Initialize message */
-        msg->lm_mode = L9P_PACK;
-        msg->lm_niov = req->lr_data_niov;
-        memcpy(msg->lm_iov, req->lr_data_iov, sizeof(struct iovec) * req->lr_data_niov);
-    }
+	if (msg->lm_size == 0) {
+		/* Initialize message */
+		msg->lm_mode = L9P_PACK;
+		msg->lm_niov = req->lr_data_niov;
+		memcpy(msg->lm_iov, req->lr_data_iov,
+		    sizeof (struct iovec) * req->lr_data_niov);
+	}
+	
+	if (req->lr_resp.io.count + size > req->lr_req.io.count)
+		return (-1);
 
-    if (l9p_pustat(msg, st, conn->lc_version) < 0)
-        return (-1);
+	if (l9p_pustat(msg, st, conn->lc_version) < 0)
+		return (-1);
 
-    req->lr_resp.io.count += size;
-    return (0);
+	req->lr_resp.io.count += size;
+	return (0);
 }
 
 static void
 l9p_dispatch_tversion(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    enum l9p_version remote_version = L9P_INVALID_VERSION;
-    int i;
+	struct l9p_connection *conn = req->lr_conn;
+	enum l9p_version remote_version = L9P_INVALID_VERSION;
+	size_t i;
 
-    for (i = 0; i < N(l9p_versions); i++) {
-        if (strcmp(req->lr_req.version.version, l9p_versions[i]) == 0) {
-            remote_version = (enum l9p_version)i;
-            break;
-        }
-    }
+	for (i = 0; i < N(l9p_versions); i++) {
+		if (strcmp(req->lr_req.version.version, l9p_versions[i]) == 0) {
+			remote_version = (enum l9p_version)i;
+			break;
+		}
+	}
 
-    if (remote_version == L9P_INVALID_VERSION) {
-        L9P_LOG(L9P_ERROR, "unsupported remote version: %s",
-            req->lr_req.version.version);
-        l9p_respond(req, L9P_ENOFUNC);
-        return;
-    }
+	if (remote_version == L9P_INVALID_VERSION) {
+		L9P_LOG(L9P_ERROR, "unsupported remote version: %s",
+		    req->lr_req.version.version);
+		l9p_respond(req, ENOSYS);
+		return;
+	}
 
-    L9P_LOG(L9P_INFO, "remote version: %s", l9p_versions[remote_version]);
-    L9P_LOG(L9P_INFO, "local version: %s",
-        l9p_versions[conn->lc_server->ls_max_version]);
+	L9P_LOG(L9P_INFO, "remote version: %s", l9p_versions[remote_version]);
+	L9P_LOG(L9P_INFO, "local version: %s",
+	    l9p_versions[conn->lc_server->ls_max_version]);
 
-    conn->lc_version = MIN(remote_version, conn->lc_server->ls_max_version);
-    conn->lc_msize = MIN(req->lr_req.version.msize, conn->lc_msize);
-    conn->lc_max_io_size = conn->lc_msize - 24;
-    req->lr_resp.version.version = strdup(l9p_versions[conn->lc_version]);
-    req->lr_resp.version.msize = conn->lc_msize;
-    l9p_respond(req, NULL);
+	conn->lc_version = MIN(remote_version, conn->lc_server->ls_max_version);
+	conn->lc_msize = MIN(req->lr_req.version.msize, conn->lc_msize);
+	conn->lc_max_io_size = conn->lc_msize - 24;
+	req->lr_resp.version.version = strdup(l9p_versions[conn->lc_version]);
+	req->lr_resp.version.msize = conn->lc_msize;
+	l9p_respond(req, 0);
 }
 
 static void
 l9p_dispatch_tattach(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
+	struct l9p_connection *conn = req->lr_conn;
 
-    req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.hdr.fid);
-    conn->lc_server->ls_backend->attach(conn->lc_server->ls_backend->softc, req);
+	req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) 
+		req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+
+	conn->lc_server->ls_backend->attach(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_tclunk(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
+	struct l9p_connection *conn = req->lr_conn;
 
-    req->lr_fid = l9p_connection_find_fid(conn, req->lr_req.hdr.fid);
-    if (!req->lr_fid) {
-        l9p_respond(req, L9P_ENOFID);
-        return;
-    }
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
 
-    conn->lc_server->ls_backend->clunk(conn->lc_server->ls_backend->softc, req);
+	conn->lc_server->ls_backend->clunk(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_tflush(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
+	struct l9p_connection *conn = req->lr_conn;
 
-    if (!conn->lc_server->ls_backend->flush) {
-        l9p_respond(req, L9P_ENOFUNC);
-        return;
-    }
+	if (!conn->lc_server->ls_backend->flush) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
 
-    conn->lc_server->ls_backend->flush(conn->lc_server->ls_backend->softc, req);
+	conn->lc_server->ls_backend->flush(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_tcreate(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct l9p_openfile *fid;
+	struct l9p_connection *conn = req->lr_conn;
 
-    if (l9p_connection_find_fid(conn, req->lr_req.tcreate.hdr.fid) != NULL) {
-        l9p_respond(req, L9P_ENOFID);
-        return;
-    }
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
 
-    req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.tattach.afid);
-    conn->lc_server->ls_backend->create(conn->lc_server->ls_backend->softc, req);
+	if (!conn->lc_server->ls_backend->create) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	conn->lc_server->ls_backend->create(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_topen(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct l9p_openfile *fid;
+	struct l9p_connection *conn = req->lr_conn;
 
-    req->lr_fid = l9p_connection_find_fid(conn, req->lr_req.topen.hdr.fid);
-    if (!req->lr_fid) {
-        l9p_respond(req, L9P_ENOFID);
-        return;
-    }
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (!req->lr_fid) {
+		l9p_respond(req, EBADF);
+		return;
+	}
 
-    if (!conn->lc_server->ls_backend->open) {
-        l9p_respond(req, L9P_ENOFUNC);
-        return;
-    }
+	if (!conn->lc_server->ls_backend->open) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
 
-    conn->lc_server->ls_backend->open(conn->lc_server->ls_backend->softc, req);
+	conn->lc_server->ls_backend->open(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_tread(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct l9p_openfile *fid;
+	struct l9p_connection *conn = req->lr_conn;
 
-    req->lr_fid = l9p_connection_find_fid(conn, req->lr_req.hdr.fid);
-    if (!req->lr_fid) {
-        l9p_respond(req, L9P_ENOFID);
-        return;
-    }
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (!req->lr_fid) {
+		l9p_respond(req, EBADF);
+		return;
+	}
 
-    l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
-        req->lr_data_iov, &req->lr_data_niov, 11);
+	l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
+	    req->lr_data_iov, &req->lr_data_niov, 11);
 
-    conn->lc_server->ls_backend->read(conn->lc_server->ls_backend->softc, req);
+	conn->lc_server->ls_backend->read(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_tremove(struct l9p_request *req)
 {
+	struct l9p_connection *conn = req->lr_conn;
 
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (!req->lr_fid) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	if (!conn->lc_server->ls_backend->remove) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	conn->lc_server->ls_backend->remove(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_tstat(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct l9p_openfile *fid;
+	struct l9p_connection *conn = req->lr_conn;
 
-    req->lr_fid = l9p_connection_find_fid(conn, req->lr_req.twalk.hdr.fid);
-    if (!req->lr_fid) {
-        l9p_respond(req, L9P_ENOFID);
-        return;
-    }
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (!req->lr_fid) {
+		l9p_respond(req, EBADF);
+		return;
+	}
 
-    if (!conn->lc_server->ls_backend->stat) {
-        l9p_respond(req, L9P_ENOFUNC);
-        return;
-    }
+	if (!conn->lc_server->ls_backend->stat) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
 
-    conn->lc_server->ls_backend->stat(conn->lc_server->ls_backend->softc, req);
+	conn->lc_server->ls_backend->stat(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_twalk(struct l9p_request *req)
 {
-    struct l9p_connection *conn = req->lr_conn;
-    struct l9p_openfile *fid;
+	struct l9p_connection *conn = req->lr_conn;
 
-    req->lr_fid = l9p_connection_find_fid(conn, req->lr_req.twalk.hdr.fid);
-    if (!req->lr_fid) {
-        l9p_respond(req, L9P_ENOFID);
-        return;
-    }
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
 
-    if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
-        req->lr_newfid = l9p_connection_alloc_fid(conn, req->lr_req.twalk.newfid);
-        if (req->lr_newfid == NULL) {
-            l9p_respond(req, L9P_ENOFID);
-            return;
-        }
-    }
+	if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
+		req->lr_newfid = l9p_connection_alloc_fid(conn,
+		    req->lr_req.twalk.newfid);
+		if (req->lr_newfid == NULL) {
+			l9p_respond(req, EBADF);
+			return;
+		}
+	}
 
-    if (!conn->lc_server->ls_backend->walk) {
-        l9p_respond(req, L9P_ENOFUNC);
-        return;
-    }
+	if (!conn->lc_server->ls_backend->walk) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
 
-    conn->lc_server->ls_backend->walk(conn->lc_server->ls_backend->softc, req);
+	conn->lc_server->ls_backend->walk(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_twrite(struct l9p_request *req)
 {
+	struct l9p_connection *conn = req->lr_conn;
 
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.twalk.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	if (!conn->lc_server->ls_backend->write) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	l9p_seek_iov(req->lr_req_msg.lm_iov, req->lr_req_msg.lm_niov,
+	    req->lr_data_iov, &req->lr_data_niov, 23);
+
+	conn->lc_server->ls_backend->write(conn->lc_server->ls_backend->softc, req);
 }
 
 static void
 l9p_dispatch_twstat(struct l9p_request *req)
 {
+	struct l9p_connection *conn = req->lr_conn;
 
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (!req->lr_fid) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	if (!conn->lc_server->ls_backend->wstat) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	conn->lc_server->ls_backend->wstat(conn->lc_server->ls_backend->softc, req);
 }

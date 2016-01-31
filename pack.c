@@ -25,9 +25,9 @@
  *
  */
 
- /*
-  * Based on libixp code: ©2007-2010 Kris Maglione <maglione.k at Gmail>
-  */
+/*
+ * Based on libixp code: ©2007-2010 Kris Maglione <maglione.k at Gmail>
+ */
 
 #include <stdlib.h>
 #include <string.h>
@@ -36,369 +36,372 @@
 #include <sys/param.h>
 #include <sys/uio.h>
 #include "lib9p.h"
+#include "lib9p_impl.h"
 
 #define N(ary)          (sizeof(ary) / sizeof(*ary))
 #define STRING_SIZE(s)  (L9P_WORD + (s != NULL ? strlen(s) : 0))
 #define QID_SIZE        (L9P_BYTE + L9P_DWORD + L9P_QWORD)
 
 static int l9p_iov_io(struct l9p_message *, void *, size_t);
-static int l9p_puint(struct l9p_message *, enum l9p_integer_type, uint32_t *);
 static inline int l9p_pu8(struct l9p_message *, uint8_t *);
 static inline int l9p_pu16(struct l9p_message *, uint16_t *);
 static inline int l9p_pu32(struct l9p_message *, uint32_t *);
 static inline int l9p_pu64(struct l9p_message *, uint64_t *);
 static int l9p_pustring(struct l9p_message *, char **s);
-static int l9p_pustrings(struct l9p_message *, uint16_t *,char *[], size_t);
-static int l9p_pudata(struct l9p_message *, uint8_t **, size_t);
+static int l9p_pustrings(struct l9p_message *, uint16_t *, char *[], size_t);
 static int l9p_puqid(struct l9p_message *, struct l9p_qid *);
-static int l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q,
-    size_t);
+static int l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q);
 
 static int
 l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
 {
-    size_t done = 0;
-    size_t left = len;
+	size_t done = 0;
+	size_t left = len;
 
-    assert(msg != NULL);
+	assert(msg != NULL);
 
-    if (len == 0)
-        return (0);
+	if (len == 0)
+		return (0);
 
-    if (msg->lm_cursor_iov >= msg->lm_niov)
-        return (-1);
-    
-    assert(buffer != NULL);
+	if (msg->lm_cursor_iov >= msg->lm_niov)
+		return (-1);
 
-    while (left > 0) {
-        size_t idx = msg->lm_cursor_iov;
-        size_t space = msg->lm_iov[idx].iov_len - msg->lm_cursor_offset;
-        size_t towrite = MIN(space, left);
+	assert(buffer != NULL);
 
-        if (msg->lm_mode == L9P_PACK)
-            memcpy(msg->lm_iov[idx].iov_base + msg->lm_cursor_offset,
-                buffer + done, towrite);
+	while (left > 0) {
+		size_t idx = msg->lm_cursor_iov;
+		size_t space = msg->lm_iov[idx].iov_len - msg->lm_cursor_offset;
+		size_t towrite = MIN(space, left);
 
-        if (msg->lm_mode == L9P_UNPACK)
-            memcpy(buffer + done, msg->lm_iov[idx].iov_base +
-                msg->lm_cursor_offset, towrite);
+		if (msg->lm_mode == L9P_PACK)
+			memcpy(msg->lm_iov[idx].iov_base + msg->lm_cursor_offset,
+		    buffer + done, towrite);
 
-        msg->lm_cursor_offset += towrite;
+		if (msg->lm_mode == L9P_UNPACK)
+			memcpy(buffer + done, msg->lm_iov[idx].iov_base +
+		    msg->lm_cursor_offset, towrite);
 
-        if (space - towrite == 0) {
-            /* Advance to next iov */
-            msg->lm_cursor_iov++;
-            msg->lm_cursor_offset = 0;
+		msg->lm_cursor_offset += towrite;
 
-            if (msg->lm_cursor_iov > msg->lm_niov)
-                return (-1);
-        }
+		if (space - towrite == 0) {
+			/* Advance to next iov */
+			msg->lm_cursor_iov++;
+			msg->lm_cursor_offset = 0;
 
-        done += towrite;
-        left -= towrite;
-    }
+			if (msg->lm_cursor_iov > msg->lm_niov)
+				return (-1);
+		}
 
-    msg->lm_size += done;
-    return (done);
+		done += towrite;
+		left -= towrite;
+	}
+
+	msg->lm_size += done;
+	return (done);
 }
 
 static inline int
 l9p_pu8(struct l9p_message *msg, uint8_t *val)
 {
 
-    return (l9p_iov_io(msg, val, sizeof(uint8_t)));
+	return (l9p_iov_io(msg, val, sizeof (uint8_t)));
 }
 
 static inline int
 l9p_pu16(struct l9p_message *msg, uint16_t *val)
 {
 
-    return (l9p_iov_io(msg, val, sizeof(uint16_t)));
+	return (l9p_iov_io(msg, val, sizeof (uint16_t)));
 }
 
 static inline int
 l9p_pu32(struct l9p_message *msg, uint32_t *val)
 {
 
-    return(l9p_iov_io(msg, val, sizeof(uint32_t)));
+	return (l9p_iov_io(msg, val, sizeof (uint32_t)));
 }
 
 static inline int
 l9p_pu64(struct l9p_message *msg, uint64_t *val)
 {
 
-    return(l9p_iov_io(msg, val, sizeof(uint64_t)));
+	return (l9p_iov_io(msg, val, sizeof (uint64_t)));
 }
 
 static int
 l9p_pustring(struct l9p_message *msg, char **s)
 {
-    uint16_t len;
+	uint16_t len;
 
-    if (msg->lm_mode == L9P_PACK)
-	    len = *s != NULL ? strlen(*s) : 0;
-    
-    if (l9p_pu16(msg, &len) < 0)
-        return (-1);
+	if (msg->lm_mode == L9P_PACK)
+		len = *s != NULL ? strlen(*s) : 0;
 
-    if (msg->lm_mode == L9P_UNPACK)
-        *s = calloc(1, len + 1);
+	if (l9p_pu16(msg, &len) < 0)
+		return (-1);
 
-    if (l9p_iov_io(msg, *s, len) < 0)
-        return (-1);
+	if (msg->lm_mode == L9P_UNPACK)
+		*s = l9p_calloc(1, len + 1);
 
-    return (len + 2);
+	if (l9p_iov_io(msg, *s, len) < 0)
+		return (-1);
+
+	return (len + 2);
 }
 
 static int
 l9p_pustrings(struct l9p_message *msg, uint16_t *num, char *strings[],
     size_t max)
 {
-    char *s;
-    uint i, size;
-    uint16_t len;
-    int r = 0;
+	size_t i;
+	int ret;
+	int r = 0;
 
-    l9p_pu16(msg, num);
+	l9p_pu16(msg, num);
 
-    for (i = 0; i < MIN(*num, max); i++) {
-        if (l9p_pustring(msg, &strings[i]) < 0)
-            return (-1);
-    }
-}
+	for (i = 0; i < MIN(*num, max); i++) {
+		ret = l9p_pustring(msg, &strings[i]);
+		if (ret < 1)
+			return (-1);
 
-static int
-l9p_pudata(struct l9p_message *msg, uint8_t **data, size_t len)
-{
-    if (msg->lm_mode == L9P_UNPACK)
-        *data = malloc(len);
-        
-    return (l9p_iov_io(msg, *data, len));
+		r += ret;
+	}
+
+	return (r);
 }
 
 static int
 l9p_puqid(struct l9p_message *msg, struct l9p_qid *qid)
 {
-    int r = 0;
+	int r = 0;
 
-    r += l9p_pu8(msg, (uint8_t *)&qid->type);
-    r += l9p_pu32(msg, &qid->version);
-    r += l9p_pu64(msg, &qid->path);
+	r += l9p_pu8(msg, (uint8_t *) & qid->type);
+	r += l9p_pu32(msg, &qid->version);
+	r += l9p_pu64(msg, &qid->path);
 
-    return (r);
+	return (r);
 }
 
 static int
-l9p_puqids(struct l9p_message *msg, uint16_t *num, struct l9p_qid *qids,
-    size_t max)
+l9p_puqids(struct l9p_message *msg, uint16_t *num, struct l9p_qid *qids)
 {
-    int i;
-    l9p_pu16(msg, num);
+	int i, ret, r = 0;
+	l9p_pu16(msg, num);
 
-    for (i = 0; i < *num; i++) {
-        if (l9p_puqid(msg, &qids[i]) < 0)
-            return (-1);
-    }
+	for (i = 0; i < *num; i++) {
+		ret = l9p_puqid(msg, &qids[i]);
+		if (ret < 0)
+			return (-1);
+
+		r += ret;
+	}
+
+	return (r);
 }
 
 int
 l9p_pustat(struct l9p_message *msg, struct l9p_stat *stat,
     enum l9p_version version)
 {
-    int r = 0;
-    uint16_t size;
+	int r = 0;
+	uint16_t size;
 
-    if (msg->lm_mode == L9P_PACK)
-        size = l9p_sizeof_stat(stat, version) - 2;
+	if (msg->lm_mode == L9P_PACK)
+		size = l9p_sizeof_stat(stat, version) - 2;
 
-    r += l9p_pu16(msg, &size);
-    r += l9p_pu16(msg, &stat->type);
-    r += l9p_pu32(msg, &stat->dev);
-    r += l9p_puqid(msg, &stat->qid);
-    r += l9p_pu32(msg, &stat->mode);
-    r += l9p_pu32(msg, &stat->atime);
-    r += l9p_pu32(msg, &stat->mtime);
-    r += l9p_pu64(msg, &stat->length);
-    r += l9p_pustring(msg, &stat->name);
-    r += l9p_pustring(msg, &stat->uid);
-    r += l9p_pustring(msg, &stat->gid);
-    r += l9p_pustring(msg, &stat->muid);
+	r += l9p_pu16(msg, &size);
+	r += l9p_pu16(msg, &stat->type);
+	r += l9p_pu32(msg, &stat->dev);
+	r += l9p_puqid(msg, &stat->qid);
+	r += l9p_pu32(msg, &stat->mode);
+	r += l9p_pu32(msg, &stat->atime);
+	r += l9p_pu32(msg, &stat->mtime);
+	r += l9p_pu64(msg, &stat->length);
+	r += l9p_pustring(msg, &stat->name);
+	r += l9p_pustring(msg, &stat->uid);
+	r += l9p_pustring(msg, &stat->gid);
+	r += l9p_pustring(msg, &stat->muid);
 
-    if (version == L9P_2000U) {
-	r += l9p_pustring(msg, &stat->extension);
-        r += l9p_pu32(msg, &stat->n_uid);
-        r += l9p_pu32(msg, &stat->n_gid);
-        r += l9p_pu32(msg, &stat->n_muid);
-    }
+	if (version == L9P_2000U) {
+		r += l9p_pustring(msg, &stat->extension);
+		r += l9p_pu32(msg, &stat->n_uid);
+		r += l9p_pu32(msg, &stat->n_gid);
+		r += l9p_pu32(msg, &stat->n_muid);
+	}
+	
+	if (r < size + 2)
+		return (-1);
 
-    return (r);
+	return (r);
 }
 
 int
 l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
     enum l9p_version version)
 {
-    uint32_t length = 0;
+	uint32_t length = 0;
 
-    l9p_pu32(msg, &length);
-    l9p_pu8(msg, &fcall->hdr.type);
-    l9p_pu16(msg, &fcall->hdr.tag);
+	l9p_pu32(msg, &length);
+	l9p_pu8(msg, &fcall->hdr.type);
+	l9p_pu16(msg, &fcall->hdr.tag);
 
-    switch (fcall->hdr.type) {
-        case L9P_TVERSION:
-        case L9P_RVERSION:
-            l9p_pu32(msg, &fcall->version.msize);
-            l9p_pustring(msg, &fcall->version.version);
-            break;
+	switch (fcall->hdr.type) {
+		case L9P_TVERSION:
+		case L9P_RVERSION:
+			l9p_pu32(msg, &fcall->version.msize);
+			l9p_pustring(msg, &fcall->version.version);
+			break;
 
-        case L9P_TAUTH:
-            l9p_pu32(msg, &fcall->tauth.afid);
-            l9p_pustring(msg, &fcall->tauth.uname);
-            l9p_pustring(msg, &fcall->tauth.aname);
-            if (version == L9P_2000U)
-                l9p_pu32(msg, &fcall->tauth.n_uname);
-            break;
+		case L9P_TAUTH:
+			l9p_pu32(msg, &fcall->tauth.afid);
+			l9p_pustring(msg, &fcall->tauth.uname);
+			l9p_pustring(msg, &fcall->tauth.aname);
+			if (version == L9P_2000U)
+				l9p_pu32(msg, &fcall->tauth.n_uname);
+			break;
 
-        case L9P_RAUTH:
-            l9p_puqid(msg, &fcall->rauth.aqid);
-            break;
+		case L9P_RAUTH:
+			l9p_puqid(msg, &fcall->rauth.aqid);
+			break;
 
-        case L9P_RATTACH:
-            l9p_puqid(msg, &fcall->rattach.qid);
-            break;
+		case L9P_RATTACH:
+			l9p_puqid(msg, &fcall->rattach.qid);
+			break;
 
-        case L9P_TATTACH:
-            l9p_pu32(msg, &fcall->hdr.fid);
-            l9p_pu32(msg, &fcall->tattach.afid);
-            l9p_pustring(msg, &fcall->tattach.uname);
-            l9p_pustring(msg, &fcall->tattach.aname);
-            break;
+		case L9P_TATTACH:
+			l9p_pu32(msg, &fcall->hdr.fid);
+			l9p_pu32(msg, &fcall->tattach.afid);
+			l9p_pustring(msg, &fcall->tattach.uname);
+			l9p_pustring(msg, &fcall->tattach.aname);
+			if (version == L9P_2000U)
+				l9p_pu32(msg, &fcall->tattach.n_uname);
+			break;
 
-        case L9P_RERROR:
-            l9p_pustring(msg, &fcall->error.ename);
-            if (version == L9P_2000U)
-                l9p_pu32(msg, &fcall->error.errnum);
-            break;
+		case L9P_RERROR:
+			l9p_pustring(msg, &fcall->error.ename);
+			if (version == L9P_2000U)
+				l9p_pu32(msg, &fcall->error.errnum);
+			break;
 
-        case L9P_TFLUSH:
-            l9p_pu16(msg, &fcall->tflush.oldtag);
-            break;
+		case L9P_TFLUSH:
+			l9p_pu16(msg, &fcall->tflush.oldtag);
+			break;
 
-        case L9P_TWALK:
-            l9p_pu32(msg, &fcall->hdr.fid);
-            l9p_pu32(msg, &fcall->twalk.newfid);
-            l9p_pustrings(msg, &fcall->twalk.nwname, fcall->twalk.wname,
-                N(fcall->twalk.wname));
-            break;
+		case L9P_TWALK:
+			l9p_pu32(msg, &fcall->hdr.fid);
+			l9p_pu32(msg, &fcall->twalk.newfid);
+			l9p_pustrings(msg, &fcall->twalk.nwname,
+			    fcall->twalk.wname, N(fcall->twalk.wname));
+			break;
 
-        case L9P_RWALK:
-            l9p_puqids(msg, &fcall->rwalk.nwqid, fcall->rwalk.wqid,
-                N(fcall->rwalk.wqid));
-            break;
+		case L9P_RWALK:
+			l9p_puqids(msg, &fcall->rwalk.nwqid, fcall->rwalk.wqid);
+			break;
 
-        case L9P_TOPEN:
-            l9p_pu32(msg, &fcall->hdr.fid);
-            l9p_pu8(msg, &fcall->topen.mode);
-            break;
+		case L9P_TOPEN:
+			l9p_pu32(msg, &fcall->hdr.fid);
+			l9p_pu8(msg, &fcall->topen.mode);
+			break;
 
-        case L9P_ROPEN:
-        case L9P_RCREATE:
-            l9p_puqid(msg, &fcall->ropen.qid);
-            l9p_pu32(msg, &fcall->ropen.iounit);
-            break;
+		case L9P_ROPEN:
+		case L9P_RCREATE:
+			l9p_puqid(msg, &fcall->ropen.qid);
+			l9p_pu32(msg, &fcall->ropen.iounit);
+			break;
 
-        case L9P_TCREATE:
-            l9p_pu32(msg, &fcall->hdr.fid);
-            l9p_pustring(msg, &fcall->tcreate.name);
-            l9p_pu32(msg, &fcall->tcreate.perm);
-            l9p_pu8(msg, &fcall->tcreate.mode);
-            if (version == L9P_2000U)
-                l9p_pustring(msg, &fcall->tcreate.extension);
-            break;
+		case L9P_TCREATE:
+			l9p_pu32(msg, &fcall->hdr.fid);
+			l9p_pustring(msg, &fcall->tcreate.name);
+			l9p_pu32(msg, &fcall->tcreate.perm);
+			l9p_pu8(msg, &fcall->tcreate.mode);
+			if (version == L9P_2000U)
+				l9p_pustring(msg, &fcall->tcreate.extension);
+			break;
 
-        case L9P_TREAD:
-            l9p_pu32(msg, &fcall->hdr.fid);
-            l9p_pu64(msg, &fcall->io.offset);
-            l9p_pu32(msg, &fcall->io.count);
-            break;
+		case L9P_TREAD:
+			l9p_pu32(msg, &fcall->hdr.fid);
+			l9p_pu64(msg, &fcall->io.offset);
+			l9p_pu32(msg, &fcall->io.count);
+			break;
 
-        case L9P_RREAD:
-            l9p_pu32(msg, &fcall->io.count);
-            break;
+		case L9P_RREAD:
+			l9p_pu32(msg, &fcall->io.count);
+			break;
 
-        case L9P_TWRITE:
-            l9p_pu32(msg, &fcall->hdr.fid);
-            l9p_pu64(msg, &fcall->io.offset);
-            l9p_pu32(msg, &fcall->io.count);
-            break;
+		case L9P_TWRITE:
+			l9p_pu32(msg, &fcall->hdr.fid);
+			l9p_pu64(msg, &fcall->io.offset);
+			l9p_pu32(msg, &fcall->io.count);
+			break;
 
-        case L9P_RWRITE:
-            l9p_pu32(msg, &fcall->io.count);
-            break;
+		case L9P_RWRITE:
+			l9p_pu32(msg, &fcall->io.count);
+			break;
 
-        case L9P_TCLUNK:
-        case L9P_TSTAT:
-            l9p_pu32(msg, &fcall->hdr.fid);
-            break;
+		case L9P_TCLUNK:
+		case L9P_TSTAT:
+		case L9P_TREMOVE:
+			l9p_pu32(msg, &fcall->hdr.fid);
+			break;
 
-        case L9P_RSTAT:
-            {
-                uint16_t size = l9p_sizeof_stat(&fcall->rstat.stat, version);
-                l9p_pu16(msg, &size);
-                l9p_pustat(msg, &fcall->rstat.stat, version);
-            }
-            break;
-            
-        case L9P_TWSTAT:
-            {
-                uint16_t size;
-                l9p_pu32(msg, &fcall->hdr.fid);
-                l9p_pu16(msg, &size);
-                l9p_pustat(msg, &fcall->twstat.stat, version);
-            }
-            break;
-    }
+		case L9P_RSTAT:
+		{
+			uint16_t size = l9p_sizeof_stat(&fcall->rstat.stat,
+			    version);
+			l9p_pu16(msg, &size);
+			l9p_pustat(msg, &fcall->rstat.stat, version);
+		}
+			break;
 
-    if (msg->lm_mode == L9P_PACK) {
-        /* Rewind to the beginning */
-        uint32_t len = msg->lm_size;
-        msg->lm_cursor_offset = 0;
-        msg->lm_cursor_iov = 0;
+		case L9P_TWSTAT:
+		{
+			uint16_t size;
+			l9p_pu32(msg, &fcall->hdr.fid);
+			l9p_pu16(msg, &size);
+			l9p_pustat(msg, &fcall->twstat.stat, version);
+		}
+			break;
+	}
 
-        /* 
-         * Subtract 4 bytes from message size, becase we're
-         * overwriting size (rewinding message to the beginning)
-         * and writing again.
-         */
-        msg->lm_size -= sizeof(uint32_t);
+	if (msg->lm_mode == L9P_PACK) {
+		/* Rewind to the beginning */
+		uint32_t len = msg->lm_size;
+		msg->lm_cursor_offset = 0;
+		msg->lm_cursor_iov = 0;
 
-        if (fcall->hdr.type == L9P_RREAD)
-            len += fcall->io.count;
+		/* 
+		 * Subtract 4 bytes from message size, becase we're
+		 * overwriting size (rewinding message to the beginning)
+		 * and writing again.
+		 */
+		msg->lm_size -= sizeof (uint32_t);
 
-        l9p_pu32(msg, &len);
-    }
+		if (fcall->hdr.type == L9P_RREAD)
+			len += fcall->io.count;
 
-    return (0);
+		l9p_pu32(msg, &len);
+	}
+
+	return (0);
 }
 
 uint16_t
 l9p_sizeof_stat(struct l9p_stat *stat, enum l9p_version version)
 {
-    uint16_t size = L9P_WORD /* size */
-        + L9P_WORD /* type */
-        + L9P_DWORD /* dev */
-        + QID_SIZE /* qid */
-        + 3 * L9P_DWORD /* mode, atime, mtime */
-        + L9P_QWORD /* length */
-        + STRING_SIZE(stat->name)
-        + STRING_SIZE(stat->uid)
-        + STRING_SIZE(stat->gid)
-        + STRING_SIZE(stat->muid);
-    
-    if (version == L9P_2000U) {
-	    size += STRING_SIZE(stat->extension)
-		+ 3 * L9P_DWORD;
-    }
-    
-    return (size);
+	uint16_t size = L9P_WORD /* size */
+	    + L9P_WORD /* type */
+	    + L9P_DWORD /* dev */
+	    + QID_SIZE /* qid */
+	    + 3 * L9P_DWORD /* mode, atime, mtime */
+	    + L9P_QWORD /* length */
+	    + STRING_SIZE(stat->name)
+	    + STRING_SIZE(stat->uid)
+	    + STRING_SIZE(stat->gid)
+	    + STRING_SIZE(stat->muid);
+
+	if (version == L9P_2000U) {
+		size += STRING_SIZE(stat->extension)
+		    + 3 * L9P_DWORD;
+	}
+
+	return (size);
 }

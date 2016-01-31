@@ -38,6 +38,10 @@ enum l9p_log_level
 
 void l9p_logf(enum l9p_log_level level, const char *func, const char *fmt, ...);
 
+#if defined(L9P_DEBUG)
 #define	L9P_LOG(level, fmt, ...) l9p_logf(level, __func__, fmt, ##__VA_ARGS__)
-	
+#else
+#define L9P_LOG(level, fmt, ...)
+#endif
+
 #endif	/* LIB9P_LOG_H */

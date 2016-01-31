@@ -30,12 +30,14 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <assert.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/event.h>
 #include <sys/uio.h>
 #include <netdb.h>
 #include "../lib9p.h"
+#include "../lib9p_impl.h"
 #include "../log.h"
 #include "socket.h" 
 
@@ -75,7 +77,8 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 		return (-1);
 
 	for (res = res0; res; res = res->ai_next) {
-		int s = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+		int s = socket(res->ai_family, res->ai_socktype,
+		    res->ai_protocol);
 
 		val = 1;
 		setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
@@ -89,17 +92,23 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 		}
 
 		sockets[nsockets] = s;
-		EV_SET(&kev[nsockets++], s, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 0);
+		EV_SET(&kev[nsockets++], s, EVFILT_READ, EV_ADD | EV_ENABLE, 0,
+		    0, 0);
 		listen(s, 10);
 	}
 
 	kq = kqueue();
-	kevent(kq, kev, nsockets, NULL, 0, NULL);
+
+	if (kevent(kq, kev, nsockets, NULL, 0, NULL) < 0) {
+		L9P_LOG(L9P_ERROR, "kevent(): %s", strerror(errno));
+		return (-1);
+	}
 
 	for (;;) {
 		evs = kevent(kq, NULL, 0, event, nsockets, NULL);
 		if (evs < 0) {
-
+			L9P_LOG(L9P_ERROR, "kevent(): %s", strerror(errno));
+			return (-1);
 		}
 
 		for (i = 0; i < evs; i++) {
@@ -109,7 +118,8 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 			    &client_addr_len);
 
 			if (news < 0) {
-				L9P_LOG(L9P_WARNING, "accept(): %s", strerror(errno));
+				L9P_LOG(L9P_WARNING, "accept(): %s",
+				    strerror(errno));
 				continue;
 			}
 
@@ -144,12 +154,14 @@ l9p_socket_accept(struct l9p_server *server, int conn_fd,
 		return;
 	}
 
-	sc = calloc(1, sizeof(sc));
+	sc = l9p_calloc(1, sizeof(*sc));
 	sc->ls_conn = conn;
 	sc->ls_fd = conn_fd;
 
 	l9p_connection_on_send_response(conn, l9p_socket_send_response, sc);
-	l9p_connection_on_get_response_buffer(conn, l9p_socket_get_response_buffer, sc);
+	l9p_connection_on_get_response_buffer(conn,
+	    l9p_socket_get_response_buffer, sc);
+
 	pthread_create(&sc->ls_thread, NULL, l9p_socket_thread, sc);
 }
 
@@ -178,11 +190,13 @@ static int
 l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 {
 	uint32_t msize;
-	uint32_t toread;
+	int toread;
 	void *buffer;
 	int fd = sc->ls_fd;
 
-	buffer = malloc(sizeof(uint32_t));
+	assert(fd > 0);
+
+	buffer = l9p_malloc(sizeof(uint32_t));
 
 	if (xread(fd, buffer, sizeof(uint32_t)) != sizeof(uint32_t)) {
 		L9P_LOG(L9P_ERROR, "short read: %s", strerror(errno));
@@ -200,19 +214,20 @@ l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 
 	*size = msize;
 	*buf = buffer;
-	L9P_LOG(L9P_INFO, "%p: read complete message, buf=%p size=%d", sc->ls_conn, buffer, msize);
+	L9P_LOG(L9P_INFO, "%p: read complete message, buf=%p size=%d",
+	    sc->ls_conn, buffer, msize);
 
 	return (0);
 }
 
 static int
 l9p_socket_get_response_buffer(struct l9p_request *req, struct iovec *iov,
-    size_t *niovp, void *arg)
+    size_t *niovp, void *arg __unused)
 {
 	size_t size = req->lr_conn->lc_msize;
 	void *buf;
 
-	buf = malloc(size);
+	buf = l9p_malloc(size);
 	iov[0].iov_base = buf;
 	iov[0].iov_len = size;
 
@@ -221,15 +236,18 @@ l9p_socket_get_response_buffer(struct l9p_request *req, struct iovec *iov,
 }
 
 static int
-l9p_socket_send_response(struct l9p_request *req, const struct iovec *iov,
-    const size_t niov, const size_t iolen, void *arg)
+l9p_socket_send_response(struct l9p_request *req __unused,
+    const struct iovec *iov, const size_t niov __unused, const size_t iolen,
+    void *arg)
 {
 	struct l9p_socket_softc *sc = (struct l9p_socket_softc *)arg;
+
+	assert(sc->ls_fd > 0);
 
 	L9P_LOG(L9P_DEBUG, "%p: sending reply, buf=%p, size=%d", arg,
 	    iov[0].iov_base, iolen);
 
-	if (xwrite(sc->ls_fd, iov[0].iov_base, iolen) != iolen) {
+	if (xwrite(sc->ls_fd, iov[0].iov_base, iolen) != (int)iolen) {
 		L9P_LOG(L9P_ERROR, "short write: %s", strerror(errno));
 		return (-1);
 	}

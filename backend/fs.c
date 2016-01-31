@@ -49,7 +49,7 @@
 #include "../log.h"
 
 static struct openfile *open_fid(const char *);
-static void dostat(struct l9p_stat *, char *, struct stat *, bool unix);
+static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void generate_qid(struct stat *, struct l9p_qid *);
 static void fs_attach(void *, struct l9p_request *);
 static void fs_clunk(void *, struct l9p_request *);
@@ -100,7 +100,7 @@ open_fid(const char *path)
 }
 
 static void
-dostat(struct l9p_stat *s, char *name, struct stat *buf, bool unix)
+dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
 {
 	struct passwd *user;
 	struct group *group;
@@ -116,8 +116,11 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool unix)
 	if (S_ISDIR(buf->st_mode))
 		s->mode |= L9P_DMDIR;
 
-	if (S_ISLNK(buf->st_mode) && unix)
+	if (S_ISLNK(buf->st_mode) && dotu)
 		s->mode |= L9P_DMSYMLINK;
+
+	if (S_ISCHR(buf->st_mode) || S_ISBLK(buf->st_mode))
+		s->mode |= L9P_DMDEVICE;
 
 	s->atime = (uint32_t)buf->st_atime;
 	s->mtime = (uint32_t)buf->st_mtime;
@@ -126,12 +129,12 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool unix)
 	/* XXX: not thread safe */
 	s->name = strdup(basename(name));
 
-	if (!unix) {
+	if (!dotu) {
 		user = getpwuid(buf->st_uid);
 		group = getgrgid(buf->st_gid);
-		s->uid = user != NULL ? user->pw_name : "";
-		s->gid = group != NULL ? group->gr_name : "";
-		s->muid = user != NULL ? user->pw_name : "";
+		s->uid = user != NULL ? user->pw_name : NULL;
+		s->gid = group != NULL ? group->gr_name : NULL;
+		s->muid = user != NULL ? user->pw_name : NULL;
 	} else {
 		/*
 		 * When using 9P2000.u, we don't need to bother about
@@ -146,7 +149,7 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool unix)
 			ssize_t ret = readlink(name, target, MAXPATHLEN);
 
 			if (ret < 0) {
-				s->extension = "";
+				s->extension = NULL;
 				return;
 			}
 
@@ -155,6 +158,11 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool unix)
 
 		if (S_ISBLK(buf->st_mode)) {
 			asprintf(&s->extension, "b %d %d", major(buf->st_rdev),
+			    minor(buf->st_rdev));
+		}
+
+		if (S_ISCHR(buf->st_mode)) {
+			asprintf(&s->extension, "c %d %d", major(buf->st_rdev),
 			    minor(buf->st_rdev));
 		}
 	}
@@ -284,7 +292,7 @@ fs_create(void *softc, struct l9p_request *req)
 	struct openfile *file = req->lr_fid->lo_aux;
 	struct stat st;
 	char *newname;
-	mode_t mode = req->lr_req.tcreate.mode & 0777;
+	mode_t mode = req->lr_req.tcreate.perm & 0777;
 
 	assert(file != NULL);
 
@@ -342,8 +350,8 @@ fs_create(void *softc, struct l9p_request *req)
 		}
 	} else {
 		file->fd = open(newname,
-		    O_CREAT | O_TRUNC | mode,
-		    req->lr_req.tcreate.perm);
+		    O_CREAT | O_TRUNC | req->lr_req.tcreate.mode,
+		    mode);
 	}
 
 	if (lchown(newname, file->uid, file->gid) != 0) {
@@ -400,7 +408,7 @@ fs_read(void *softc __unused, struct l9p_request *req)
 {
 	struct openfile *file;
 	struct l9p_stat l9stat;
-	bool unix = req->lr_conn->lc_version >= L9P_2000U;
+	bool dotu = req->lr_conn->lc_version >= L9P_2000U;
 	ssize_t ret;
 
 	file = req->lr_fid->lo_aux;
@@ -414,7 +422,7 @@ fs_read(void *softc __unused, struct l9p_request *req)
 			d = readdir(file->dir);
 			if (d) {
 				lstat(d->d_name, &st);
-				dostat(&l9stat, d->d_name, &st, unix);
+				dostat(&l9stat, d->d_name, &st, dotu);
 				if (l9p_pack_stat(req, &l9stat) != 0) {
 					seekdir(file->dir, -1);
 					break;
@@ -469,7 +477,7 @@ fs_remove(void *softc, struct l9p_request *req)
 		return;
 	}
 
-	if (stat(file->name, &st) != 0) {
+	if (lstat(file->name, &st) != 0) {
 		l9p_respond(req, errno);
 		return;
 	}
@@ -492,13 +500,13 @@ fs_stat(void *softc __unused, struct l9p_request *req)
 {
 	struct openfile *file;
 	struct stat st;
-	bool unix = req->lr_conn->lc_version >= L9P_2000U;
+	bool dotu = req->lr_conn->lc_version >= L9P_2000U;
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
 	
 	lstat(file->name, &st);
-	dostat(&req->lr_resp.rstat.stat, file->name, &st, unix);
+	dostat(&req->lr_resp.rstat.stat, file->name, &st, dotu);
 
 	l9p_respond(req, 0);
 }
@@ -626,15 +634,17 @@ fs_wstat(void *softc, struct l9p_request *req)
 	}
 
 	if (l9stat->n_uid != (uid_t)~0) {
-		/* XXX: not implemented */
-		l9p_respond(req, ENOSYS);
-		return;
+		if (lchown(file->name, l9stat->n_uid, (gid_t)-1) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
 	}
 
 	if (l9stat->n_gid != (uid_t)~0) {
-		/* XXX: not implemented */
-		l9p_respond(req, ENOSYS);
-		return;
+		if (lchown(file->name, (uid_t)-1, l9stat->n_gid) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
 	}
 
 	if (l9stat->mode != (uint32_t)~0) {

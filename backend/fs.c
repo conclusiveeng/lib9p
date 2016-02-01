@@ -397,12 +397,12 @@ fs_create(void *softc, struct l9p_request *req)
 		l9p_respond(req, errno);
 		return;
 	}
-	
+
 	if (stat(newname, &st) != 0) {
 		l9p_respond(req, errno);
 		return;
 	}
-	
+
 	generate_qid(&st, &req->lr_resp.rcreate.qid);
 	l9p_respond(req, 0);
 }
@@ -443,7 +443,7 @@ fs_open(void *softc __unused, struct l9p_request *req)
 			return;
 		}
 	}
-	
+
 	generate_qid(&st, &req->lr_resp.ropen.qid);
 
 	req->lr_resp.ropen.iounit = conn->lc_max_io_size;

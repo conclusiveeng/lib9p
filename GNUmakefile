@@ -30,10 +30,10 @@ SERVER := server
 all: build $(LIB) $(SERVER)
 	
 $(LIB): $(LIB_OBJS)
-	cc -dynamiclib $^ -o build/$@
+	cc -dynamiclib $^ -o $@
 	
 $(SERVER): $(SERVER_OBJS) $(LIB)
-	cc $< -o build/$(SERVER) -Lbuild/ -l9p
+	cc $< -o build/$(SERVER) -L. -l9p
 	
 clean:
 	rm -rf build

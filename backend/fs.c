@@ -536,9 +536,16 @@ fs_remove(void *softc, struct l9p_request *req)
 		return;
 	}
 
-	if (unlink(file->name) != 0) {
-		l9p_respond(req, errno);
-		return;
+	if (S_ISDIR(st.st_mode)) {
+		if (rmdir(file->name) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+	} else {
+		if (unlink(file->name) != 0) {
+			l9p_respond(req, errno);
+			return;
+		}
 	}
 
 	l9p_respond(req, 0);
@@ -683,15 +690,8 @@ fs_wstat(void *softc, struct l9p_request *req)
 		}
 	}
 
-	if (l9stat->n_uid != (uid_t)~0) {
-		if (lchown(file->name, l9stat->n_uid, (gid_t)-1) != 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-	}
-
-	if (l9stat->n_gid != (uid_t)~0) {
-		if (lchown(file->name, (uid_t)-1, l9stat->n_gid) != 0) {
+	if (req->lr_conn->lc_version >= L9P_2000U) {
+		if (lchown(file->name, l9stat->n_uid, l9stat->n_gid) != 0) {
 			l9p_respond(req, errno);
 			return;
 		}

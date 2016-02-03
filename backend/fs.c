@@ -584,6 +584,7 @@ fs_walk(void *softc __unused, struct l9p_request *req)
 
 	newfile = open_fid(name);
 	newfile->uid = file->uid;
+	newfile->gid = file->gid;
 	req->lr_newfid->lo_aux = newfile;
 	req->lr_resp.rwalk.nwqid = i;
 	l9p_respond(req, 0);

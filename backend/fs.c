@@ -347,9 +347,11 @@ fs_create(void *softc, struct l9p_request *req)
 
 		sun.sun_family = AF_UNIX;
 		sun.sun_len = sizeof(struct sockaddr_un);
-		strncpy(sun.sun_path, newname, sizeof(sun.sun_path));
+		strncpy(sun.sun_path, req->lr_req.tcreate.name,
+		    sizeof(sun.sun_path));
 
-		if (bind(s, (struct sockaddr *)&sun, sun.sun_len) < 0) {
+		if (bindat(dirfd(file->dir), s, (struct sockaddr *)&sun,
+		    sun.sun_len) < 0) {
 			l9p_respond(req, errno);
 			return;
 		}

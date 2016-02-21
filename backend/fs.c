@@ -304,6 +304,7 @@ fs_create(void *softc, struct l9p_request *req)
 	struct stat st;
 	char *newname;
 	mode_t mode = req->lr_req.tcreate.perm & 0777;
+	int fd;
 
 	assert(file != NULL);
 
@@ -349,9 +350,20 @@ fs_create(void *softc, struct l9p_request *req)
 		sun.sun_len = sizeof(struct sockaddr_un);
 		strncpy(sun.sun_path, req->lr_req.tcreate.name,
 		    sizeof(sun.sun_path));
+		
+		fd = open(file->name, O_RDONLY);
+		if (fd < 0) {
+			l9p_respond(req, errno);
+			return;
+		}
 
-		if (bindat(dirfd(file->dir), s, (struct sockaddr *)&sun,
+		if (bindat(fd, s, (struct sockaddr *)&sun,
 		    sun.sun_len) < 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+		
+		if (close(fd) != 0) {
 			l9p_respond(req, errno);
 			return;
 		}

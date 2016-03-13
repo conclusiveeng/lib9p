@@ -30,6 +30,7 @@
 #define LIB9P_LIB9P_H
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <sys/uio.h>
@@ -81,6 +82,7 @@ struct l9p_message {
 	size_t lm_cursor_iov;
 	size_t lm_cursor_offset;
 	size_t lm_size;
+	bool lm_estimate;
 };
 
 struct l9p_request {
@@ -92,8 +94,10 @@ struct l9p_request {
 	union l9p_fcall lr_resp;
 	struct l9p_openfile *lr_fid;
 	struct l9p_openfile *lr_newfid;
-	struct l9p_connection *lr_conn;
-	pthread_t lr_thread;
+	union {
+		struct l9p_connection *lr_conn;
+		struct l9p_client *lr_client;
+	};
 	void *lr_aux;
 	struct iovec lr_data_iov[L9P_MAX_IOV];
 	size_t lr_data_niov;
@@ -126,6 +130,31 @@ struct l9p_server {
 	struct l9p_backend *ls_backend;
 	enum l9p_version ls_max_version;
 	LIST_HEAD(, l9p_connection) ls_conns;
+};
+
+struct l9p_client {
+	enum l9p_version lc_version;
+	bool lc_attached;
+	struct ht lc_files;
+	struct ht lc_requests;
+	uint32_t lc_maxfid;
+	uint32_t lc_maxtag;
+};
+
+struct l9p_client_request {
+	struct l9p_client *lcr_client;
+	uint32_t lcr_tag;
+	struct l9p_message lcr_req_msg;
+	struct l9p_message lcr_resp_msg;
+	struct l9p_message lcr_readdir_msg;
+	union l9p_fcall lcr_req;
+	union l9p_fcall lcr_resp;
+};
+
+struct l9p_client_file {
+	struct l9p_client *lcf_client;
+	struct l9p_qid lcf_qid;
+	uint32_t lcf_fid;
 };
 
 struct l9p_backend {
@@ -182,5 +211,17 @@ void l9p_freefcall(union l9p_fcall *fcall);
 void l9p_freestat(struct l9p_stat *stat);
 
 int l9p_backend_fs_init(struct l9p_backend **backendp, const char *root);
+
+int l9p_create_client(struct l9p_client **clientp);
+struct l9p_client_file *l9p_alloc_file(struct l9p_client *client);
+int l9p_client_attach(struct l9p_client *client, const char *aname,
+    const char *uname, uid_t uid);
+struct l9p_client_file * l9p_client_walk(struct l9p_client *client,
+    struct l9p_client_file *start, const char *path);
+int l9p_client_open(struct l9p_client_file *file, int mode);
+int l9p_client_clunk(struct l9p_client_file *file);
+int l9p_client_read(struct l9p_client_file *file, off_t offset, size_t count,
+    struct iovec *iov, size_t niov);
+int l9p_client_stat(struct l9p_client_file *file, struct l9p_stat *stat);
 
 #endif  /* LIB9P_LIB9P_H */

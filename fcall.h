@@ -37,6 +37,46 @@
 #define L9P_MAX_WELEM   256
 
 enum l9p_ftype {
+	L9P_TLERROR = 6,
+	L9P_RLERROR,
+	L9P_TSTATFS = 8,
+	L9P_RSTATFS,
+	L9P_TLOPEN = 12,
+	L9P_RLOPEN,
+	L9P_TLCREATE = 14,
+	L9P_RLCREATE,
+	L9P_TSYMLINK = 16,
+	L9P_RSYMLINK,
+	L9P_TMKNOD = 18,
+	L9P_RMKNOD,
+	L9P_TRENAME = 20,
+	L9P_RRENAME,
+	L9P_TREADLINK = 22,
+	L9P_RREADLINK,
+	L9P_TGETATTR = 24,
+	L9P_RGETATTR,
+	L9P_TSETATTR = 26,
+	L9P_RSETATTR,
+	L9P_TXATTRWALK = 30,
+	L9P_RXATTRWALK,
+	L9P_TXATTRCREATE = 32,
+	L9P_RXATTRCREATE,
+	L9P_TREADDIR = 40,
+	L9P_RREADDIR,
+	L9P_TFSYNC = 50,
+	L9P_RFSYNC,
+	L9P_TLOCK = 52,
+	L9P_RLOCK,
+	L9P_TGETLOCK = 54,
+	L9P_RGETLOCK,
+	L9P_TLINK = 70,
+	L9P_RLINK,
+	L9P_TMKDIR = 72,
+	L9P_RMKDIR,
+	L9P_TRENAMEAT = 74,
+	L9P_RRENAMEAT,
+	L9P_TUNLINKAT = 76,
+	L9P_RUNLINKAT,
 	L9P_TVERSION = 100,
 	L9P_RVERSION,
 	L9P_TAUTH = 102,
@@ -139,6 +179,184 @@ struct l9p_stat {
 	uid_t n_muid;
 };
 
+struct l9p_f_rstatfs {
+	struct l9p_hdr hdr;
+	uint32_t type; 
+	uint32_t bsize;
+	uint64_t blocks;
+	uint64_t bfree;
+	uint64_t bavail;
+	uint64_t files;
+	uint64_t ffree;
+	uint64_t fsid;
+	uint32_t namelen;
+};
+
+struct l9p_f_tlcreate {
+	struct l9p_hdr hdr;
+	char *name;
+	uint32_t flags;
+	uint32_t mode;
+	uint32_t gid;
+};
+
+struct l9p_f_tsymlink {
+	struct l9p_hdr hdr;
+	char *name;
+	char *symtgt;
+	uint32_t gid;
+};
+
+struct l9p_f_tmknod {
+	struct l9p_hdr hdr;
+	char *name;
+	uint32_t mode;
+	uint32_t major;
+	uint32_t minor;
+	uint32_t gid;
+};
+
+struct l9p_f_trename {
+	struct l9p_hdr hdr;
+	uint32_t dfid;
+	char *name;
+};
+
+struct l9p_f_rreadlink {
+	struct l9p_hdr hdr;
+	char *target;
+};
+
+struct l9p_f_tgetattr {
+	struct l9p_hdr hdr;
+	uint64_t request_mask;
+};
+
+struct l9p_f_rgetattr {
+	struct l9p_hdr hdr;
+	uint64_t valid;
+	struct l9p_qid qid;
+	uint32_t mode;
+	uint32_t uid;
+	uint32_t gid;
+	uint64_t nlink;
+	uint64_t rdev;
+	uint64_t size;
+	uint64_t blksize;
+	uint64_t blocks;
+	uint64_t atime_sec;
+	uint64_t atime_nsec;
+	uint64_t mtime_sec;
+	uint64_t mtime_nsec;
+	uint64_t ctime_sec;
+	uint64_t ctime_nsec;
+	uint64_t btime_sec;
+	uint64_t btime_nsec;
+	uint64_t gen;
+	uint64_t data_version;
+};
+
+struct l9p_f_tsetattr {
+	struct l9p_hdr hdr;
+	uint32_t valid;
+	uint32_t mode;
+	uint32_t uid;
+	uint32_t gid;
+	uint64_t size;
+	uint64_t atime_sec;
+	uint64_t atime_nsec;
+	uint64_t mtime_sec;
+	uint64_t mtime_nsec;
+};
+
+struct l9p_f_txattrwalk {
+	struct l9p_hdr hdr;
+	uint32_t newfid;
+	char *name;
+};
+
+struct l9p_f_rxattrwalk {
+	struct l9p_hdr hdr;
+	uint64_t size;
+};
+
+struct l9p_f_txattrcreate {
+	struct l9p_hdr hdr;
+	char *name;
+	uint64_t attr_size;
+	uint32_t flags;
+};
+
+struct l9p_f_tlock {
+	struct l9p_hdr hdr;
+	uint8_t type;
+	uint32_t flags;
+	uint64_t start;
+	uint64_t length;
+	uint32_t proc_id;
+	char *client_id;
+};
+
+struct l9p_f_rlock {
+	struct l9p_hdr hdr;
+	uint8_t status;
+	uint8_t type;
+	uint32_t flags;
+	uint64_t start;
+	uint64_t length;
+	uint32_t proc_id;
+	char *client_id;
+};
+
+struct l9p_f_tgetlock {
+	struct l9p_hdr hdr;
+	uint8_t type;
+	uint64_t start;
+	uint64_t length;
+	uint32_t proc_id;
+	char *client_id;	
+};
+
+struct l9p_f_rgetlock {
+	struct l9p_hdr hdr;
+	uint8_t type;
+	uint64_t start;
+	uint64_t length;
+	uint32_t proc_id;
+	char *client_id;
+};
+
+struct l9p_f_tlink {
+	struct l9p_hdr hdr;
+	uint32_t dfid;
+	char *name;
+};
+
+struct l9p_f_tmkdir {
+	struct l9p_hdr hdr;
+	char *name;
+	uint32_t mode;
+	uint32_t gid;
+};
+
+struct l9p_f_rmkdir {
+	struct l9p_hdr hdr;
+	struct l9p_qid qid;
+};
+
+struct l9p_f_trenameat {
+	struct l9p_hdr hdr;
+	char *oldname;
+	uint32_t newdirfid;
+	char *newname;
+};
+
+struct l9p_f_tunlinkat {
+	struct l9p_hdr hdr;
+	char *name;
+	uint32_t flags;
+};
+
 struct l9p_f_version {
 	struct l9p_hdr hdr;
 	uint32_t msize;
@@ -215,6 +433,24 @@ struct l9p_f_twstat {
 
 union l9p_fcall {
 	struct l9p_hdr hdr;
+	struct l9p_f_rstatfs rstatfs;
+	struct l9p_f_tsymlink tsymlink;
+	struct l9p_f_tmknod tmknod;
+	struct l9p_f_trename trename;
+	struct l9p_f_rreadlink rreadlink;
+	struct l9p_f_tgetattr tgetattr;
+	struct l9p_f_rgetattr rgetattr;
+	struct l9p_f_tsetattr tsetattr;
+	struct l9p_f_txattrwalk txattrwalk;
+	struct l9p_f_rxattrwalk rxattrwalk;
+	struct l9p_f_txattrcreate txattrcreate;
+	struct l9p_f_tlock tlock;
+	struct l9p_f_rlock rlock;
+	struct l9p_f_tlink tlink;
+	struct l9p_f_tmkdir tmkdir;
+	struct l9p_f_rmkdir rmkdir;
+	struct l9p_f_trenameat trenameat;
+	struct l9p_f_tunlinkat tunlinkat;
 	struct l9p_f_version version;
 	struct l9p_f_tflush tflush;
 	struct l9p_f_ropen ropen;

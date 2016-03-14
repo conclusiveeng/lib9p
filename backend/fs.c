@@ -357,11 +357,19 @@ fs_create(void *softc, struct l9p_request *req)
 			return;
 		}
 
+#if defined(__FreeBSD__)
 		if (bindat(fd, s, (struct sockaddr *)&sun,
 		    sun.sun_len) < 0) {
 			l9p_respond(req, errno);
 			return;
 		}
+#else
+		if (bind(s, (struct sockaddr *)&sun,
+		    sun.sun_len) < 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+#endif
 		
 		if (close(fd) != 0) {
 			l9p_respond(req, errno);

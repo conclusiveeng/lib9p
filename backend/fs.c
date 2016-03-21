@@ -315,7 +315,7 @@ fs_create(void *softc, struct l9p_request *req)
 
 	asprintf(&newname, "%s/%s", file->name, req->lr_req.tcreate.name);
 
-	if (stat(file->name, &st) != 0) {
+	if (lstat(file->name, &st) != 0) {
 		l9p_respond(req, errno);
 		return;
 	}
@@ -414,7 +414,7 @@ fs_create(void *softc, struct l9p_request *req)
 		return;
 	}
 
-	if (stat(newname, &st) != 0) {
+	if (lstat(newname, &st) != 0) {
 		l9p_respond(req, errno);
 		return;
 	}

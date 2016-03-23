@@ -32,6 +32,7 @@
 #include <pthread.h>
 #include <assert.h>
 #include <sys/types.h>
+#include <sys/endian.h>
 #include <sys/socket.h>
 #include <sys/event.h>
 #include <sys/uio.h>
@@ -206,7 +207,7 @@ l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 		return (-1);
 	}
 
-	msize = *(uint32_t *)buffer;
+	msize = le32toh(*(uint32_t *)buffer);
 	toread = msize - sizeof(uint32_t);
 	buffer = realloc(buffer, msize);
 

@@ -34,6 +34,7 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/param.h>
+#include <sys/endian.h>
 #include <sys/uio.h>
 #include "lib9p.h"
 #include "lib9p_impl.h"
@@ -114,22 +115,64 @@ l9p_pu8(struct l9p_message *msg, uint8_t *val)
 static inline int
 l9p_pu16(struct l9p_message *msg, uint16_t *val)
 {
+#if _BYTE_ORDER != _LITTLE_ENDIAN
+	/*
+	 * The ifdefs are annoying, but there is no need
+	 * for all of this foolery on little-endian hosts,
+	 * and I don't expect the compiler to optimize it
+	 * all away.
+	 */
+	uint16_t copy;
+	int ret;
 
+	if (msg->lm_mode == L9P_PACK) {
+		copy = htole16(*val);
+		return (l9p_iov_io(msg, &copy, sizeof (uint16_t)));
+	}
+	ret = l9p_iov_io(msg, val, sizeof (uint16_t));
+	*val = le16toh(*val);
+	return (ret);
+#else
 	return (l9p_iov_io(msg, val, sizeof (uint16_t)));
+#endif
 }
 
 static inline int
 l9p_pu32(struct l9p_message *msg, uint32_t *val)
 {
+#if _BYTE_ORDER != _LITTLE_ENDIAN
+	uint32_t copy;
+	int ret;
 
+	if (msg->lm_mode == L9P_PACK) {
+		copy = htole32(*val);
+		return (l9p_iov_io(msg, &copy, sizeof (uint32_t)));
+	}
+	ret = l9p_iov_io(msg, val, sizeof (uint32_t));
+	*val = htole32(*val);
+	return (ret);
+#else
 	return (l9p_iov_io(msg, val, sizeof (uint32_t)));
+#endif
 }
 
 static inline int
 l9p_pu64(struct l9p_message *msg, uint64_t *val)
 {
+#if _BYTE_ORDER != _LITTLE_ENDIAN
+	uint64_t copy;
+	int ret;
 
+	if (msg->lm_mode == L9P_PACK) {
+		copy = htole64(*val);
+		return (l9p_iov_io(msg, &copy, sizeof (uint64_t)));
+	}
+	ret = l9p_iov_io(msg, val, sizeof (uint32_t));
+	*val = htole32(*val);
+	return (ret);
+#else
 	return (l9p_iov_io(msg, val, sizeof (uint64_t)));
+#endif
 }
 
 static int

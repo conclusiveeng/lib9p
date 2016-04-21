@@ -38,36 +38,33 @@
 #include "lib9p.h"
 #include "fcall.h"
 
+/*
+ * Using indexed initializers, we can have these occur in any order.
+ * Using adjacent-string concatenation ("T" #name, "R" #name), we
+ * get both Tfoo and Rfoo strings with one copy of the name.
+ * Alas, there is no stupid cpp trick to lowercase-ify, so we
+ * have to write each name twice.  In which case we might as well
+ * make the second one a string in the first place and not bother
+ * with the stringizing.
+ */
+#define X(NAME, name)	[L9P_T##NAME] = "T" name, [L9P_R##NAME] = "R" name
 static const char *ftype_names[] = {
-	"Tversion",
-	"Rversion",
-	"Tauth",
-	"Rauth",
-	"Tattach",
-	"Rattach",
-	"Terror",
-	"Rerror",
-	"Tflush",
-	"Rflush",
-	"Twalk",
-	"Rwalk",
-	"Topen",
-	"Ropen",
-	"Tcreate",
-	"Rcreate",
-	"Tread",
-	"Rread",
-	"Twrite",
-	"Rwrite",
-	"Tclunk",
-	"Rclunk",
-	"Tremove",
-	"Rremove",
-	"Tstat",
-	"Rstat",
-	"Twstat",
-	"Rwstat"
+	X(VERSION,	"version"),
+	X(AUTH,		"auth"),
+	X(ATTACH,	"attach"),
+	X(ERROR,	"error"),
+	X(FLUSH,	"flush"),
+	X(WALK,		"walk"),
+	X(OPEN,		"open"),
+	X(CREATE,	"create"),
+	X(READ,		"read"),
+	X(WRITE,	"write"),
+	X(CLUNK,	"clunk"),
+	X(REMOVE,	"remove"),
+	X(STAT,		"stat"),
+	X(WSTAT,	"wstat"),
 };
+#undef X
 
 void
 l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,

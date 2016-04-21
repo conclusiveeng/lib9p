@@ -152,13 +152,14 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 
 	type = fcall->hdr.type;
 
-	if (type < 100 || type > 127) {
+	if (type < L9P__FIRST || type >= L9P__LAST_PLUS_1 ||
+	    ftype_names[type - L9P__FIRST] == NULL) {
 		sbuf_printf(sb, "<unknown request %d> tag=%d", type,
 		    fcall->hdr.tag);
 		return;
 	}
 
-	sbuf_printf(sb, "%s tag=%d", ftype_names[type - L9P_TVERSION],
+	sbuf_printf(sb, "%s tag=%d", ftype_names[type - L9P__FIRST],
 	    fcall->hdr.tag);
 
 	switch (type) {

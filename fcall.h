@@ -37,6 +37,7 @@
 #define L9P_MAX_WELEM   256
 
 enum l9p_ftype {
+	L9P__FIRST = 100,	/* NB: must be first */
 	L9P_TVERSION = 100,
 	L9P_RVERSION,
 	L9P_TAUTH = 102,
@@ -65,6 +66,7 @@ enum l9p_ftype {
 	L9P_RSTAT,
 	L9P_TWSTAT = 126,
 	L9P_RWSTAT,
+	L9P__LAST_PLUS_1,	/* NB: must be last */
 };
 
 enum l9p_qid_type {

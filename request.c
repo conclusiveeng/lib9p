@@ -56,11 +56,44 @@ static void l9p_dispatch_twalk(struct l9p_request *req);
 static void l9p_dispatch_twrite(struct l9p_request *req);
 static void l9p_dispatch_twstat(struct l9p_request *req);
 
-static const struct
-{
+struct l9p_handler {
 	enum l9p_ftype type;
 	void (*handler)(struct l9p_request *);
-} l9p_handlers[] = {
+};
+
+static const struct l9p_handler l9p_handlers_no_version[] = {
+	{L9P_TVERSION, l9p_dispatch_tversion},
+};
+
+static const struct l9p_handler l9p_handlers_base[] = {
+	{L9P_TVERSION, l9p_dispatch_tversion},
+	{L9P_TATTACH, l9p_dispatch_tattach},
+	{L9P_TCLUNK, l9p_dispatch_tclunk},
+	{L9P_TFLUSH, l9p_dispatch_tflush},
+	{L9P_TCREATE, l9p_dispatch_tcreate},
+	{L9P_TOPEN, l9p_dispatch_topen},
+	{L9P_TREAD, l9p_dispatch_tread},
+	{L9P_TWRITE, l9p_dispatch_twrite},
+	{L9P_TREMOVE, l9p_dispatch_tremove},
+	{L9P_TSTAT, l9p_dispatch_tstat},
+	{L9P_TWALK, l9p_dispatch_twalk},
+	{L9P_TWSTAT, l9p_dispatch_twstat}
+};
+static const struct l9p_handler l9p_handlers_dotu[] = {
+	{L9P_TVERSION, l9p_dispatch_tversion},
+	{L9P_TATTACH, l9p_dispatch_tattach},
+	{L9P_TCLUNK, l9p_dispatch_tclunk},
+	{L9P_TFLUSH, l9p_dispatch_tflush},
+	{L9P_TCREATE, l9p_dispatch_tcreate},
+	{L9P_TOPEN, l9p_dispatch_topen},
+	{L9P_TREAD, l9p_dispatch_tread},
+	{L9P_TWRITE, l9p_dispatch_twrite},
+	{L9P_TREMOVE, l9p_dispatch_tremove},
+	{L9P_TSTAT, l9p_dispatch_tstat},
+	{L9P_TWALK, l9p_dispatch_twalk},
+	{L9P_TWSTAT, l9p_dispatch_twstat}
+};
+static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TVERSION, l9p_dispatch_tversion},
 	{L9P_TATTACH, l9p_dispatch_tattach},
 	{L9P_TCLUNK, l9p_dispatch_tclunk},
@@ -75,10 +108,20 @@ static const struct
 	{L9P_TWSTAT, l9p_dispatch_twstat}
 };
 
-static const char *l9p_versions[] = {
-	"9P2000",
-	"9P2000.u",
-	"9P2000.L"
+/*
+ * NB: version index 0 is reserved for new connections, and
+ * is a protocol that handles only L9P_TVERSION.  Once we get a
+ * valid version, we start a new session using its dispatch table.
+ */
+static const struct {
+	const char *name;
+	const struct l9p_handler *handlers;
+	int n_handlers;
+} l9p_versions[] = {
+	{ "<none>", l9p_handlers_no_version, N(l9p_handlers_no_version) },
+	{ "9P2000", l9p_handlers_base, N(l9p_handlers_base) },
+	{ "9P2000.u", l9p_handlers_dotu, N(l9p_handlers_dotu), },
+	{ "9P2000.L", l9p_handlers_dotL, N(l9p_handlers_dotL), },
 };
 
 void
@@ -87,7 +130,8 @@ l9p_dispatch_request(struct l9p_request *req)
 #if defined(L9P_DEBUG)
 	struct sbuf *sb;
 #endif
-	size_t i;
+	size_t i, n;
+	const struct l9p_handler *handlers;
 
 #if defined(L9P_DEBUG)
 	sb = sbuf_new_auto();
@@ -100,9 +144,11 @@ l9p_dispatch_request(struct l9p_request *req)
 
 	req->lr_tag = req->lr_req.hdr.tag;
 
-	for (i = 0; i < N(l9p_handlers); i++) {
-		if (req->lr_req.hdr.type == l9p_handlers[i].type) {
-			l9p_handlers[i].handler(req);
+	handlers = l9p_versions[req->lr_conn->lc_version].handlers;
+	n = l9p_versions[req->lr_conn->lc_version].n_handlers;
+	for (i = 0; i < n; i++) {
+		if (req->lr_req.hdr.type == handlers[i].type) {
+			handlers[i].handler(req);
 			return;
 		}
 	}
@@ -213,11 +259,14 @@ static void
 l9p_dispatch_tversion(struct l9p_request *req)
 {
 	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_server *server = conn->lc_server;
 	enum l9p_version remote_version = L9P_INVALID_VERSION;
 	size_t i;
+	const char *remote_version_name;
 
 	for (i = 0; i < N(l9p_versions); i++) {
-		if (strcmp(req->lr_req.version.version, l9p_versions[i]) == 0) {
+		if (strcmp(req->lr_req.version.version,
+		    l9p_versions[i].name) == 0) {
 			remote_version = (enum l9p_version)i;
 			break;
 		}
@@ -230,14 +279,15 @@ l9p_dispatch_tversion(struct l9p_request *req)
 		return;
 	}
 
-	L9P_LOG(L9P_INFO, "remote version: %s", l9p_versions[remote_version]);
+	remote_version_name = l9p_versions[remote_version].name;
+	L9P_LOG(L9P_INFO, "remote version: %s", remote_version_name);
 	L9P_LOG(L9P_INFO, "local version: %s",
-	    l9p_versions[conn->lc_server->ls_max_version]);
+	    l9p_versions[server->ls_max_version].name);
 
-	conn->lc_version = MIN(remote_version, conn->lc_server->ls_max_version);
+	conn->lc_version = MIN(remote_version, server->ls_max_version);
 	conn->lc_msize = MIN(req->lr_req.version.msize, conn->lc_msize);
 	conn->lc_max_io_size = conn->lc_msize - 24;
-	req->lr_resp.version.version = strdup(l9p_versions[conn->lc_version]);
+	req->lr_resp.version.version = strdup(remote_version_name);
 	req->lr_resp.version.msize = conn->lc_msize;
 	l9p_respond(req, 0);
 }

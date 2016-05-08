@@ -148,6 +148,9 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
 		/*
 		 * When using 9P2000.u, we don't need to bother about
 		 * providing user and group names in textual form.
+		 *
+		 * NB: if the asprintf()s fail, s->extension should
+		 * be unset so we can ignore these.
 		 */
 		s->n_uid = buf->st_uid;
 		s->n_gid = buf->st_gid;
@@ -313,7 +316,11 @@ fs_create(void *softc, struct l9p_request *req)
 		return;
 	}
 
-	asprintf(&newname, "%s/%s", file->name, req->lr_req.tcreate.name);
+	if (asprintf(&newname, "%s/%s",
+	    file->name, req->lr_req.tcreate.name) < 0) {
+		l9p_respond(req, ENAMETOOLONG);
+		return;
+	}
 
 	if (lstat(file->name, &st) != 0) {
 		l9p_respond(req, errno);
@@ -658,6 +665,7 @@ fs_wstat(void *softc, struct l9p_request *req)
 	struct fs_softc *sc = softc;
 	struct openfile *file;
 	struct l9p_stat *l9stat = &req->lr_req.twstat.stat;
+	int error = 0;
 
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
@@ -675,8 +683,8 @@ fs_wstat(void *softc, struct l9p_request *req)
 	 */
 
 	if (sc->fs_readonly) {
-		l9p_respond(req, EROFS);
-		return;
+		error = EROFS;
+		goto out;
 	}
 
 	if (l9stat->atime != (uint32_t)~0) {
@@ -688,33 +696,33 @@ fs_wstat(void *softc, struct l9p_request *req)
 	}
 
 	if (l9stat->dev != (uint32_t)~0) {
-		l9p_respond(req, EPERM);
-		return;
+		error = EPERM;
+		goto out;
 	}
 
 	if (l9stat->length != (uint64_t)~0) {
 		if (file->dir != NULL) {
-			l9p_respond(req, EINVAL);
-			return;
+			error = EINVAL;
+			goto out;
 		}
 		
 		if (truncate(file->name, (off_t)l9stat->length) != 0) {
-			l9p_respond(req, errno);
-			return;
+			error = errno;
+			goto out;
 		}
 	}
 
 	if (req->lr_conn->lc_version >= L9P_2000U) {
 		if (lchown(file->name, l9stat->n_uid, l9stat->n_gid) != 0) {
-			l9p_respond(req, errno);
-			return;
+			error = errno;
+			goto out;
 		}
 	}
 
 	if (l9stat->mode != (uint32_t)~0) {
 		if (chmod(file->name, l9stat->mode & 0777) != 0) {
-			l9p_respond(req, errno);
-			return;
+			error = errno;
+			goto out;
 		}
 	}
 
@@ -722,14 +730,17 @@ fs_wstat(void *softc, struct l9p_request *req)
 		/* XXX: not thread safe */
 		char *dir = dirname(file->name);
 		char *newname;
-		
-		asprintf(&newname, "%s/%s", dir, l9stat->name);
-		rename(file->name, newname);
-		
+
+		if (asprintf(&newname, "%s/%s", dir, l9stat->name) < 0) {
+			error = errno;
+			goto out;
+		}
+		if (rename(file->name, newname))
+			error = errno;
 		free(newname);
 	}
-
-	l9p_respond(req, 0);
+out:
+	l9p_respond(req, error);
 }
 
 static void

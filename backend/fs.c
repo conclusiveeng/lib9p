@@ -50,6 +50,7 @@
 #include "../lib9p.h"
 #include "../lib9p_impl.h"
 #include "../log.h"
+#include "../rfuncs.h"
 
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
@@ -135,15 +136,18 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
 	s->mtime = (uint32_t)buf->st_mtime;
 	s->length = (uint64_t)buf->st_size;
 
-	/* XXX: not thread safe */
-	s->name = strdup(basename(name));
+	s->name = r_basename(name, NULL, 0);
 
 	if (!dotu) {
-		user = getpwuid(buf->st_uid);
-		group = getgrgid(buf->st_gid);
+		struct r_pgdata udata, gdata;
+
+		user = r_getpwuid(buf->st_uid, &udata);
+		group = r_getgrgid(buf->st_gid, &gdata);
 		s->uid = user != NULL ? strdup(user->pw_name) : NULL;
 		s->gid = group != NULL ? strdup(group->gr_name) : NULL;
 		s->muid = user != NULL ? strdup(user->pw_name) : NULL;
+		r_pgfree(&udata);
+		r_pgfree(&gdata);
 	} else {
 		/*
 		 * When using 9P2000.u, we don't need to bother about
@@ -727,17 +731,23 @@ fs_wstat(void *softc, struct l9p_request *req)
 	}
 
 	if (strlen(l9stat->name) > 0) {
-		/* XXX: not thread safe */
-		char *dir = dirname(file->name);
+		char *dir;
 		char *newname;
 
+		dir = r_dirname(file->name, NULL, 0);
+		if (dir == NULL) {
+			error = errno;
+			goto out;
+		}
 		if (asprintf(&newname, "%s/%s", dir, l9stat->name) < 0) {
 			error = errno;
+			free(dir);
 			goto out;
 		}
 		if (rename(file->name, newname))
 			error = errno;
 		free(newname);
+		free(dir);
 	}
 out:
 	l9p_respond(req, error);

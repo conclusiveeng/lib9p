@@ -207,10 +207,13 @@ check_access(struct stat *st, uid_t uid, int amode)
 	if (st->st_uid == uid) {
 		if (amode == L9P_OREAD && st->st_mode & S_IRUSR)
 			return (true);
-		
+
 		if (amode == L9P_OWRITE && st->st_mode & S_IWUSR)
 			return (true);
-		
+
+		if (amode == L9P_ORDWR && st->st_mode & S_IRUSR && st->st_mode & S_IWUSR)
+			return (true);
+
 		if (amode == L9P_OEXEC && st->st_mode & S_IXUSR)
 			return (true);
 	}
@@ -220,6 +223,9 @@ check_access(struct stat *st, uid_t uid, int amode)
 		return (true);
 
 	if (amode == L9P_OWRITE && st->st_mode & S_IWOTH)
+		return (true);
+
+	if (amode == L9P_ORDWR && st->st_mode & S_IROTH && st->st_mode & S_IWOTH)
 		return (true);
 
 	if (amode == L9P_OEXEC && st->st_mode & S_IXOTH)
@@ -235,6 +241,9 @@ check_access(struct stat *st, uid_t uid, int amode)
 				return (true);
 
 			if (amode == L9P_OWRITE && st->st_mode & S_IWGRP)
+				return (true);
+
+			if (amode == L9P_ORDWR && st->st_mode & S_IRGRP && st->st_mode & S_IWGRP)
 				return (true);
 
 			if (amode == L9P_OEXEC && st->st_mode & S_IXGRP)
@@ -357,11 +366,19 @@ fs_create(void *softc, struct l9p_request *req)
 			return;
 		}
 
+#if defined(__FreeBSD__)
 		if (bindat(fd, s, (struct sockaddr *)&sun,
 		    sun.sun_len) < 0) {
 			l9p_respond(req, errno);
 			return;
 		}
+#else
+		if (bind(s, (struct sockaddr *)&sun,
+		    sun.sun_len) < 0) {
+			l9p_respond(req, errno);
+			return;
+		}
+#endif
 		
 		if (close(fd) != 0) {
 			l9p_respond(req, errno);

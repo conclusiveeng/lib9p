@@ -319,9 +319,17 @@ fs_clunk(void *softc __unused, struct l9p_request *req)
  * a subsequent commit.
  */
 static inline int
-internal_mkdir(char *newname, mode_t mode)
+internal_mkdir(char *newname, mode_t mode, struct stat *st)
 {
 
+	/*
+	 * https://swtch.com/plan9port/man/man9/open.html
+	 * says that permissions are actually
+	 * perm & (~0777 | (dir.perm & 0777)).
+	 * This seems a bit restrictive; probably
+	 * there should be a control knob for this.
+	 */
+	mode &= (~0777 | (st->st_mode & 0777));
 	if (mkdir(newname, mode) != 0)
 		return (errno);
 	return (0);
@@ -506,7 +514,7 @@ fs_create(void *softc, struct l9p_request *req)
 	}
 
 	if (req->lr_req.tcreate.perm & L9P_DMDIR)
-		error = internal_mkdir(newname, mode);
+		error = internal_mkdir(newname, mode, &st);
 	else if (req->lr_req.tcreate.perm & L9P_DMSYMLINK)
 		error = internal_symlink(req, newname);
 	else if (req->lr_req.tcreate.perm & L9P_DMNAMEDPIPE)
@@ -516,6 +524,14 @@ fs_create(void *softc, struct l9p_request *req)
 	else if (req->lr_req.tcreate.perm & L9P_DMDEVICE)
 		error = internal_mknod(req, newname, mode);
 	else {
+		/*
+		 * https://swtch.com/plan9port/man/man9/open.html
+		 * says that permissions are actually
+		 * perm & (~0666 | (dir.perm & 0666)).
+		 * This seems a bit restrictive; probably
+		 * there should be a control knob for this.
+		 */
+		mode &= (~0666 | st.st_mode & 0666);
 		file->fd = open(newname,
 		    O_CREAT | O_TRUNC | req->lr_req.tcreate.mode,
 		    mode);

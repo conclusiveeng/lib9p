@@ -52,6 +52,13 @@
 #include "../log.h"
 #include "../rfuncs.h"
 
+#if defined(__FreeBSD__)
+  #include <sys/param.h>
+  #if __FreeBSD_version >= 1000000
+    #define	HAVE_BINDAT
+  #endif
+#endif
+
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void generate_qid(struct stat *, struct l9p_qid *);
@@ -338,9 +345,10 @@ internal_mkfifo(char *newname, mode_t mode)
 }
 
 static inline int
-internal_mksocket(struct openfile *file, struct l9p_request *req)
+internal_mksocket(struct openfile *file, struct l9p_request *req, char *newname)
 {
 	struct sockaddr_un sun;
+	char *path;
 	int error = 0;
 	int s = socket(AF_UNIX, SOCK_STREAM, 0);
 	int fd;
@@ -348,15 +356,46 @@ internal_mksocket(struct openfile *file, struct l9p_request *req)
 	if (s < 0)
 		return (errno);
 
+	path = newname;
+	fd = -1;
+#ifdef HAVE_BINDAT
+	/* Try bindat() if needed. */
+	if (strlen(path) >= sizeof(sun.sun_path)) {
+		fd = open(file->name, O_RDONLY);
+		if (fd >= 0)
+			path = req->lr_req.tcreate.name;
+	}
+#endif
+
+	/*
+	 * Can only create the socket if the path will fit.
+	 * Even if we are using bindat() there are limits
+	 * (the API for AF_UNIX sockets is ... not good).
+	 *
+	 * Note: in theory we can fill sun_path to the end
+	 * (omitting a terminating '\0') but in at least one
+	 * Unix-like system, this was known to behave oddly,
+	 * so we test for ">=" rather than just ">".
+	 */
+	if (strlen(path) >= sizeof(sun.sun_path)) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
 	sun.sun_family = AF_UNIX;
 	sun.sun_len = sizeof(struct sockaddr_un);
-	strncpy(sun.sun_path, req->lr_req.tcreate.name, sizeof(sun.sun_path));
+	strncpy(sun.sun_path, path, sizeof(sun.sun_path));
 
-	fd = open(file->name, O_RDONLY);
-	if (fd < 0)
+#ifdef HAVE_BINDAT
+	if (fd >= 0) {
+		if (bindat(fd, s, (struct sockaddr *)&sun, sun.sun_len) < 0)
+			error = errno;
+		goto out;	/* done now, for good or ill */
+	}
+#endif
+
+	if (bind(s, (struct sockaddr *)&sun, sun.sun_len) < 0)
 		error = errno;
-	else if (bindat(fd, s, (struct sockaddr *)&sun, sun.sun_len) < 0)
-		error = errno;
+out:
 
 	/*
 	 * It's not clear which error should override, although
@@ -472,7 +511,7 @@ fs_create(void *softc, struct l9p_request *req)
 	else if (req->lr_req.tcreate.perm & L9P_DMNAMEDPIPE)
 		error = internal_mkfifo(newname, mode);
 	else if (req->lr_req.tcreate.perm & L9P_DMSOCKET)
-		error = internal_mksocket(file, req);
+		error = internal_mksocket(file, req, newname);
 	else if (req->lr_req.tcreate.perm & L9P_DMDEVICE)
 		error = internal_mknod(req, newname, mode);
 	else {

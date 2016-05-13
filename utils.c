@@ -47,7 +47,8 @@
  * make the second one a string in the first place and not bother
  * with the stringizing.
  */
-#define X(NAME, name)	[L9P_T##NAME] = "T" name, [L9P_R##NAME] = "R" name
+#define X(NAME, name)	[L9P_T##NAME - L9P__FIRST] = "T" name, \
+			[L9P_R##NAME - L9P__FIRST] = "R" name
 static const char *ftype_names[] = {
 	X(VERSION,	"version"),
 	X(AUTH,		"auth"),

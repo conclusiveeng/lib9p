@@ -303,135 +303,202 @@ fs_clunk(void *softc __unused, struct l9p_request *req)
 	l9p_respond(req, 0);
 }
 
+/*
+ * Internal helpers for create ops.
+ *
+ * Currently these are mostly trivial since this is meant to be
+ * semantically identical to the previous version of the code, but
+ * they will be modified to handle additional details correctly in
+ * a subsequent commit.
+ */
+static inline int
+internal_mkdir(char *newname, mode_t mode)
+{
+
+	mkdir(newname, mode);	/* XXX */
+	return (0);		/* XXX */
+}
+
+static inline int
+internal_symlink(struct l9p_request *req, char *newname)
+{
+
+	if (symlink(req->lr_req.tcreate.extension, newname) != 0)
+		return (errno);
+	return (0);
+}
+
+static inline int
+internal_mkfifo(char *newname, mode_t mode)
+{
+
+	if (mkfifo(newname, mode) != 0)
+		return (errno);
+	return (0);
+}
+
+static inline int
+internal_mksocket(struct openfile *file, struct l9p_request *req)
+{
+	struct sockaddr_un sun;
+	int error = 0;
+	int s = socket(AF_UNIX, SOCK_STREAM, 0);
+	int fd;
+
+	if (s < 0)
+		return (errno);
+
+	sun.sun_family = AF_UNIX;
+	sun.sun_len = sizeof(struct sockaddr_un);
+	strncpy(sun.sun_path, req->lr_req.tcreate.name, sizeof(sun.sun_path));
+
+	fd = open(file->name, O_RDONLY);
+	if (fd < 0)
+		error = errno;
+	else if (bindat(fd, s, (struct sockaddr *)&sun, sun.sun_len) < 0)
+		error = errno;
+
+	/*
+	 * It's not clear which error should override, although
+	 * ideally we should never see either close() call fail.
+	 * In any case we do want to try to close both fd and s,
+	 * always.  Let's set error only if it is not already set,
+	 * so that all exit paths can use the same code.
+	 */
+	if (fd >= 0 && close(fd) != 0)
+		if (error == 0)
+			error = errno;
+	if (close(s) != 0)
+		if (error == 0)
+			error = errno;
+
+	return (error);
+}
+
+static inline int
+internal_mknod(struct l9p_request *req, char *newname, mode_t mode)
+{
+	char type;
+	unsigned int major, minor;
+
+	/*
+	 * ??? Should this be testing < 3?  For now, allow a single
+	 * integer mode with minor==0 implied.
+	 */
+	minor = 0;
+	if (sscanf(req->lr_req.tcreate.extension, "%c %u %u",
+	    &type, &major, &minor) < 2) {
+		return (EINVAL);
+	}
+
+	switch (type) {
+	case 'b':
+		mode |= S_IFBLK;
+		break;
+	case 'c':
+		mode |= S_IFCHR;
+		break;
+	default:
+		return (EINVAL);
+	}
+	if (mknod(newname, mode, makedev(major, minor)) != 0)
+		return (errno);
+	return (0);
+}
+
+/*
+ * Create ops.
+ *
+ * We are to create a new file under some existing path,
+ * where the new file's name is in the Tcreate request and the
+ * existing path is due to a fid-based file (req->lr_fid_lo_aux).
+ *
+ * Some ops (regular open) set file->fd, most do not.
+ */
 static void
 fs_create(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
 	struct openfile *file = req->lr_fid->lo_aux;
 	struct stat st;
-	char *newname;
+	char *newname = NULL;
 	mode_t mode = req->lr_req.tcreate.perm & 0777;
-	int fd;
+	int error = 0;
 
 	assert(file != NULL);
 
 	if (sc->fs_readonly) {
-		l9p_respond(req, EROFS);
-		return;
+		error = EROFS;
+		goto out;
 	}
 
+	/*
+	 * Build the full path.  We may not use it in some cases
+	 * (e.g., when we can use the *at() calls), and perhaps
+	 * should defer building it, but this suffices for now,
+	 * and gives us a place to put a max on path name length
+	 * (perhaps we should check even if asprintf() succeeds?).
+	 */
 	if (asprintf(&newname, "%s/%s",
 	    file->name, req->lr_req.tcreate.name) < 0) {
-		l9p_respond(req, ENAMETOOLONG);
-		return;
+		error = ENAMETOOLONG;
+		goto out;
 	}
 
+	/*
+	 * Containing directory must exist and allow access.
+	 *
+	 * There is a race here between test and subsequent
+	 * operation, which we cannot close in general, but
+	 * ideally, no one should be changing things underneath
+	 * us.  It might therefore also be nice to keep cached
+	 * lstat data, but we leave that to future optimization
+	 * (after profiling).
+	 */
 	if (lstat(file->name, &st) != 0) {
-		l9p_respond(req, errno);
-		return;
+		error = errno;
+		goto out;
 	}
 
 	if (!check_access(&st, file->uid, L9P_OWRITE)) {
-		l9p_respond(req, EPERM);
-		return;
+		error = EPERM;
+		goto out;
 	}
 
 	if (req->lr_req.tcreate.perm & L9P_DMDIR)
-		mkdir(newname, mode);
-	else if (req->lr_req.tcreate.perm & L9P_DMSYMLINK) {
-		if (symlink(req->lr_req.tcreate.extension, newname) != 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-	} else if (req->lr_req.tcreate.perm & L9P_DMNAMEDPIPE) {
-		if (mkfifo(newname, mode) != 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-	} else if (req->lr_req.tcreate.perm & L9P_DMSOCKET) {
-		struct sockaddr_un sun;
-		int s = socket(AF_UNIX, SOCK_STREAM, 0);
-
-		if (s < 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-
-		sun.sun_family = AF_UNIX;
-		sun.sun_len = sizeof(struct sockaddr_un);
-		strncpy(sun.sun_path, req->lr_req.tcreate.name,
-		    sizeof(sun.sun_path));
-		
-		fd = open(file->name, O_RDONLY);
-		if (fd < 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-
-		if (bindat(fd, s, (struct sockaddr *)&sun,
-		    sun.sun_len) < 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-		
-		if (close(fd) != 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-
-		if (close(s) != 0) {
-			l9p_respond(req, errno);
-			return;
-		}
-	} else if (req->lr_req.tcreate.perm & L9P_DMDEVICE) {
-		char type;
-		int major, minor;
-
-		if (sscanf(req->lr_req.tcreate.extension, "%c %u %u",
-		    &type, &major, &minor) < 2) {
-			l9p_respond(req, EINVAL);
-			return;
-		}
-
-		switch (type) {
-		case 'b':
-			if (mknod(newname, S_IFBLK | mode,
-			    makedev(major, minor)) != 0)
-			{
-				l9p_respond(req, errno);
-				return;
-			}
-			break;
-		case 'c':
-			if (mknod(newname, S_IFCHR | mode,
-			    makedev(major, minor)) != 0)
-			{
-				l9p_respond(req, errno);
-				return;
-			}
-			break;
-		default:
-			l9p_respond(req, EINVAL);
-			return;
-		}
-	} else {
+		error = internal_mkdir(newname, mode);
+	else if (req->lr_req.tcreate.perm & L9P_DMSYMLINK)
+		error = internal_symlink(req, newname);
+	else if (req->lr_req.tcreate.perm & L9P_DMNAMEDPIPE)
+		error = internal_mkfifo(newname, mode);
+	else if (req->lr_req.tcreate.perm & L9P_DMSOCKET)
+		error = internal_mksocket(file, req);
+	else if (req->lr_req.tcreate.perm & L9P_DMDEVICE)
+		error = internal_mknod(req, newname, mode);
+	else {
 		file->fd = open(newname,
 		    O_CREAT | O_TRUNC | req->lr_req.tcreate.mode,
 		    mode);
+		error = 0;	/* XXX */
 	}
 
+	if (error)
+		goto out;
+
 	if (lchown(newname, file->uid, file->gid) != 0) {
-		l9p_respond(req, errno);
-		return;
+		error = errno;
+		goto out;
 	}
 
 	if (lstat(newname, &st) != 0) {
-		l9p_respond(req, errno);
-		return;
+		error = errno;
+		goto out;
 	}
 
 	generate_qid(&st, &req->lr_resp.rcreate.qid);
-	l9p_respond(req, 0);
+out:
+	free(newname);
+	l9p_respond(req, error);
 }
 
 static void

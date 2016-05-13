@@ -322,8 +322,9 @@ static inline int
 internal_mkdir(char *newname, mode_t mode)
 {
 
-	mkdir(newname, mode);	/* XXX */
-	return (0);		/* XXX */
+	if (mkdir(newname, mode) != 0)
+		return (errno);
+	return (0);
 }
 
 static inline int
@@ -518,7 +519,8 @@ fs_create(void *softc, struct l9p_request *req)
 		file->fd = open(newname,
 		    O_CREAT | O_TRUNC | req->lr_req.tcreate.mode,
 		    mode);
-		error = 0;	/* XXX */
+		if (file->fd < 0)
+			error = errno;
 	}
 
 	if (error)

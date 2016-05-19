@@ -53,6 +53,8 @@ static void l9p_describe_stat(const char *, struct l9p_stat *, struct sbuf *);
  * have to write each name twice.  In which case we might as well
  * make the second one a string in the first place and not bother
  * with the stringizing.
+ *
+ * This table should have entries for each enum value in fcall.h.
  */
 #define X(NAME, name)	[L9P_T##NAME - L9P__FIRST] = "T" name, \
 			[L9P_R##NAME - L9P__FIRST] = "R" name
@@ -71,6 +73,24 @@ static const char *ftype_names[] = {
 	X(REMOVE,	"remove"),
 	X(STAT,		"stat"),
 	X(WSTAT,	"wstat"),
+	X(STATFS,	"statfs"),
+	X(LOPEN,	"lopen"),
+	X(LCREATE,	"lcreate"),
+	X(SYMLINK,	"symlink"),
+	X(MKNOD,	"mknod"),
+	X(RENAME,	"rename"),
+	X(READLINK,	"readlink"),
+	X(GETATTR,	"getattr"),
+	X(XATTRWALK,	"xattrwalk"),
+	X(XATTRCREATE,	"xattrcreate"),
+	X(READDIR,	"readdir"),
+	X(FSYNC,	"fsync"),
+	X(LOCK,		"lock"),
+	X(GETLOCK,	"getlock"),
+	X(LINK,		"link"),
+	X(MKDIR,	"mkdir"),
+	X(RENAMEAT,	"renameat"),
+	X(UNLINKAT,	"unlinkat"),
 };
 #undef X
 

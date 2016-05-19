@@ -44,7 +44,7 @@
 #include "../lib9p.h"
 #include "../lib9p_impl.h"
 #include "../log.h"
-#include "socket.h" 
+#include "socket.h"
 
 struct l9p_socket_softc
 {
@@ -90,7 +90,7 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 
 		if (s < 0)
 			continue;
-		
+
 		if (bind(s, res->ai_addr, res->ai_addrlen) < 0) {
 			close(s);
 			continue;
@@ -180,7 +180,7 @@ l9p_socket_accept(struct l9p_server *server, int conn_fd,
 
 static void *
 l9p_socket_thread(void *arg)
-{	
+{
 	struct l9p_socket_softc *sc = (struct l9p_socket_softc *)arg;
 	struct iovec iov;
 	void *buf;

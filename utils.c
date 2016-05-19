@@ -161,99 +161,118 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	    fcall->hdr.tag);
 
 	switch (type) {
-		case L9P_TVERSION:
-		case L9P_RVERSION:
-			sbuf_printf(sb, " version=\"%s\" msize=%d", fcall->version.version,
-			    fcall->version.msize);
-			return;
-		case L9P_TAUTH:
-			sbuf_printf(sb, "afid=%d uname=\"%s\" aname=\"%s\"", fcall->hdr.fid,
-			    fcall->tauth.uname, fcall->tauth.aname);
-			return;
-		case L9P_TATTACH:
-			sbuf_printf(sb, " fid=%d afid=%d uname=\"%s\" aname=\"%s\"",
-			    fcall->hdr.fid, fcall->tattach.afid, fcall->tattach.uname,
-			    fcall->tattach.aname);
-			if (version >= L9P_2000U)
-				sbuf_printf(sb, " n_uname=%d", fcall->tattach.n_uname);
-			return;
-		case L9P_RERROR:
-			sbuf_printf(sb, " ename=\"%s\" errnum=%d", fcall->error.ename,
-			    fcall->error.errnum);
-			return;
-		case L9P_TFLUSH:
-			sbuf_printf(sb, " oldtag=%d", fcall->tflush.oldtag);
-			return;
-		case L9P_TWALK:
-			sbuf_printf(sb, " fid=%d newfid=%d wname=\"",
-			    fcall->hdr.fid, fcall->twalk.newfid);
 
-			for (i = 0; i < fcall->twalk.nwname; i++) {
-				sbuf_printf(sb, "%s", fcall->twalk.wname[i]);
-				if (i != fcall->twalk.nwname - 1)
-					sbuf_printf(sb, "/");
-			}
-			sbuf_printf(sb, "\"");
-			return;
-		case L9P_RWALK:
-			sbuf_printf(sb, " wqid=[");
-			for (i = 0; i < fcall->rwalk.nwqid; i++) {
-				l9p_describe_qid(&fcall->rwalk.wqid[i], sb);
-				if (i != fcall->rwalk.nwqid - 1)
-					sbuf_printf(sb, ",");
-			}
-			sbuf_printf(sb, "]");
-			return;
-		case L9P_TOPEN:
-			sbuf_printf(sb, " fid=%d mode=%d", fcall->hdr.fid,
-			    fcall->tcreate.mode);
+	case L9P_TVERSION:
+	case L9P_RVERSION:
+		sbuf_printf(sb, " version=\"%s\" msize=%d", fcall->version.version,
+		    fcall->version.msize);
+		return;
 
-			return;
-		case L9P_ROPEN:
-			sbuf_printf(sb, " qid=");
-			l9p_describe_qid(&fcall->ropen.qid, sb);
-			sbuf_printf(sb, " iounit=%d", fcall->ropen.iounit);
-			return;
-		case L9P_TCREATE:
-			sbuf_printf(sb, " fid=%d name=\"%s\" perm=0x%08x mode=%d",
-			    fcall->hdr.fid, fcall->tcreate.name, fcall->tcreate.perm,
-			    fcall->tcreate.mode);
-			return;
-		case L9P_RCREATE:
-			return;
-		case L9P_TREAD:
-			sbuf_printf(sb, " fid=%d offset=%" PRIu64 " count=%u", fcall->hdr.fid,
-			    fcall->io.offset, fcall->io.count);
-			return;
+	case L9P_TAUTH:
+		sbuf_printf(sb, "afid=%d uname=\"%s\" aname=\"%s\"", fcall->hdr.fid,
+		    fcall->tauth.uname, fcall->tauth.aname);
+		return;
 
-		case L9P_RREAD:
-		case L9P_RWRITE:
-			sbuf_printf(sb, " count=%d", fcall->io.count);
-			return;
-		case L9P_TWRITE:
-			sbuf_printf(sb, " fid=%d offset=%" PRIu64 " count=%u", fcall->hdr.fid,
-			    fcall->io.offset, fcall->io.count);
-			return;
-		case L9P_TCLUNK:
-			sbuf_printf(sb, " fid=%d ", fcall->hdr.fid);
-			return;
-		case L9P_TREMOVE:
-			sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
-			return;
-		case L9P_RREMOVE:
-			return;
-		case L9P_TSTAT:
-			sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
-			return;
-		case L9P_RSTAT:
-			sbuf_printf(sb, " ");
-			l9p_describe_stat(&fcall->rstat.stat, sb);
-			return;
-		case L9P_TWSTAT:
-			sbuf_printf(sb, " fid=%d ", fcall->hdr.fid);
-			l9p_describe_stat(&fcall->twstat.stat, sb);
-			return;
-		case L9P_RWSTAT:
-			return;
+	case L9P_TATTACH:
+		sbuf_printf(sb, " fid=%d afid=%d uname=\"%s\" aname=\"%s\"",
+		    fcall->hdr.fid, fcall->tattach.afid, fcall->tattach.uname,
+		    fcall->tattach.aname);
+		if (version >= L9P_2000U)
+			sbuf_printf(sb, " n_uname=%d", fcall->tattach.n_uname);
+		return;
+
+	case L9P_RERROR:
+		sbuf_printf(sb, " ename=\"%s\" errnum=%d", fcall->error.ename,
+		    fcall->error.errnum);
+		return;
+
+	case L9P_TFLUSH:
+		sbuf_printf(sb, " oldtag=%d", fcall->tflush.oldtag);
+		return;
+
+	case L9P_TWALK:
+		sbuf_printf(sb, " fid=%d newfid=%d wname=\"",
+		    fcall->hdr.fid, fcall->twalk.newfid);
+
+		for (i = 0; i < fcall->twalk.nwname; i++) {
+			sbuf_printf(sb, "%s", fcall->twalk.wname[i]);
+			if (i != fcall->twalk.nwname - 1)
+				sbuf_printf(sb, "/");
+		}
+		sbuf_printf(sb, "\"");
+		return;
+
+	case L9P_RWALK:
+		sbuf_printf(sb, " wqid=[");
+		for (i = 0; i < fcall->rwalk.nwqid; i++) {
+			l9p_describe_qid(&fcall->rwalk.wqid[i], sb);
+			if (i != fcall->rwalk.nwqid - 1)
+				sbuf_printf(sb, ",");
+		}
+		sbuf_printf(sb, "]");
+		return;
+
+	case L9P_TOPEN:
+		sbuf_printf(sb, " fid=%d mode=%d", fcall->hdr.fid,
+		    fcall->tcreate.mode);
+		return;
+
+	case L9P_ROPEN:
+		sbuf_printf(sb, " qid=");
+		l9p_describe_qid(&fcall->ropen.qid, sb);
+		sbuf_printf(sb, " iounit=%d", fcall->ropen.iounit);
+		return;
+
+	case L9P_TCREATE:
+		sbuf_printf(sb, " fid=%d name=\"%s\" perm=0x%08x mode=%d",
+		    fcall->hdr.fid, fcall->tcreate.name, fcall->tcreate.perm,
+		    fcall->tcreate.mode);
+		return;
+
+	case L9P_RCREATE:
+		return;
+
+	case L9P_TREAD:
+		sbuf_printf(sb, " fid=%d offset=%" PRIu64 " count=%u", fcall->hdr.fid,
+		    fcall->io.offset, fcall->io.count);
+		return;
+
+	case L9P_RREAD:
+	case L9P_RWRITE:
+		sbuf_printf(sb, " count=%d", fcall->io.count);
+		return;
+
+	case L9P_TWRITE:
+		sbuf_printf(sb, " fid=%d offset=%" PRIu64 " count=%u", fcall->hdr.fid,
+		    fcall->io.offset, fcall->io.count);
+		return;
+
+	case L9P_TCLUNK:
+		sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
+		return;
+
+	case L9P_TREMOVE:
+		sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
+		return;
+
+	case L9P_RREMOVE:
+		return;
+
+	case L9P_TSTAT:
+		sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
+		return;
+
+	case L9P_RSTAT:
+		sbuf_printf(sb, " ");
+		l9p_describe_stat(&fcall->rstat.stat, sb);
+		return;
+
+	case L9P_TWSTAT:
+		sbuf_printf(sb, " fid=%d ", fcall->hdr.fid);
+		l9p_describe_stat(&fcall->twstat.stat, sb);
+		return;
+
+	case L9P_RWSTAT:
+		return;
 	}
 }

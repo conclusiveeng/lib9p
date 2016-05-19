@@ -683,7 +683,7 @@ fs_remove(void *softc, struct l9p_request *req)
 	struct fs_softc *sc = softc;
 	struct openfile *file;
 	struct stat st;
-	
+
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
@@ -726,7 +726,7 @@ fs_stat(void *softc __unused, struct l9p_request *req)
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
-	
+
 	lstat(file->name, &st);
 	dostat(&req->lr_resp.rstat.stat, file->name, &st, dotu);
 
@@ -777,10 +777,10 @@ fs_write(void *softc, struct l9p_request *req)
 		l9p_respond(req, EROFS);
 		return;
 	}
-	
+
 	size_t niov = l9p_truncate_iov(req->lr_data_iov,
             req->lr_data_niov, req->lr_req.io.count);
-	
+
 #if defined(__FreeBSD__)
 	ret = pwritev(file->fd, req->lr_data_iov, niov,
 	    req->lr_req.io.offset);
@@ -817,13 +817,13 @@ fs_wstat(void *softc, struct l9p_request *req)
 
 	/*
 	 * XXX:
-	 * 
+	 *
 	 * stat(9P) sez:
-	 * 
+	 *
 	 * Either all the changes in wstat request happen, or none of them
 	 * does: if the request succeeds, all changes were made; if it fails,
 	 * none were.
-	 * 
+	 *
 	 * Atomicity is clearly missing in current implementation.
 	 */
 
@@ -850,7 +850,7 @@ fs_wstat(void *softc, struct l9p_request *req)
 			error = EINVAL;
 			goto out;
 		}
-		
+
 		if (truncate(file->name, (off_t)l9stat->length) != 0) {
 			error = errno;
 			goto out;
@@ -940,7 +940,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->softc = sc;
 
 	setpassent(1);
-	
+
 	*backendp = backend;
 	return (0);
 }

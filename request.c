@@ -167,23 +167,25 @@ l9p_respond(struct l9p_request *req, int errnum)
 #endif
 
 	switch (req->lr_req.hdr.type) {
-		case L9P_TATTACH:
-			if (errnum != 0)
-				l9p_connection_remove_fid(conn, req->lr_fid);
 
-			break;
-		case L9P_TCLUNK:
-		case L9P_TREMOVE:
-			if (req->lr_fid != NULL)
-				l9p_connection_remove_fid(conn, req->lr_fid);
-			break;
+	case L9P_TATTACH:
+		if (errnum != 0)
+			l9p_connection_remove_fid(conn, req->lr_fid);
 
-		case L9P_TWALK:
-			if (errnum != 0 && req->lr_newfid != NULL &&
-			    req->lr_newfid != req->lr_fid)
-				l9p_connection_remove_fid(conn, req->lr_newfid);
+		break;
 
-			break;
+	case L9P_TCLUNK:
+	case L9P_TREMOVE:
+		if (req->lr_fid != NULL)
+			l9p_connection_remove_fid(conn, req->lr_fid);
+		break;
+
+	case L9P_TWALK:
+		if (errnum != 0 && req->lr_newfid != NULL &&
+		    req->lr_newfid != req->lr_fid)
+			l9p_connection_remove_fid(conn, req->lr_newfid);
+
+		break;
 	}
 
 	req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
@@ -239,7 +241,7 @@ l9p_pack_stat(struct l9p_request *req, struct l9p_stat *st)
 		memcpy(msg->lm_iov, req->lr_data_iov,
 		    sizeof (struct iovec) * req->lr_data_niov);
 	}
-	
+
 	if (req->lr_resp.io.count + size > req->lr_req.io.count) {
 		l9p_freestat(st);
 		return (-1);
@@ -298,7 +300,7 @@ l9p_dispatch_tattach(struct l9p_request *req)
 	struct l9p_connection *conn = req->lr_conn;
 
 	req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL) 
+	if (req->lr_fid == NULL)
 		req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 
 	conn->lc_server->ls_backend->attach(conn->lc_server->ls_backend->softc, req);

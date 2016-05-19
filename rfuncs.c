@@ -111,7 +111,7 @@ r_basename(const char *path, char *buf, size_t bufsize)
 			comp = endp;
 			while (comp > path && comp[-1] != '/')
 				comp--;
-			len = endp - comp + 1;
+			len = (size_t)(endp - comp + 1);
 		}
 	}
 	if (buf == NULL) {
@@ -194,7 +194,7 @@ r_dirname(const char *path, char *buf, size_t bufsize)
 		while (endp > path && *endp == '/')
 			endp--;
 
-		len = endp - path + 1;
+		len = (size_t)(endp - path + 1);
 		if (endp == path && *endp != '/')
 			dirpart = ".";
 		else
@@ -246,7 +246,7 @@ r_pgfree(struct r_pgdata *pg)
 struct passwd *
 r_getpwuid(uid_t uid, struct r_pgdata *pg)
 {
-	struct passwd *result;
+	struct passwd *result = NULL;
 	int error;
 
 	r_pginit(pg);
@@ -262,7 +262,7 @@ r_getpwuid(uid_t uid, struct r_pgdata *pg)
 struct group *
 r_getgrgid(gid_t gid, struct r_pgdata *pg)
 {
-	struct group *result;
+	struct group *result = NULL;
 	int error;
 
 	r_pginit(pg);

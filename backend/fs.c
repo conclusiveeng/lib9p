@@ -354,7 +354,9 @@ internal_mkfifo(char *newname, mode_t mode)
 }
 
 static inline int
-internal_mksocket(struct openfile *file, struct l9p_request *req, char *newname)
+internal_mksocket(struct openfile *file __unused,
+		  struct l9p_request *req __unused,
+		  char *newname)
 {
 	struct sockaddr_un sun;
 	char *path;
@@ -531,7 +533,7 @@ fs_create(void *softc, struct l9p_request *req)
 		 * This seems a bit restrictive; probably
 		 * there should be a control knob for this.
 		 */
-		mode &= (~0666 | st.st_mode & 0666);
+		mode &= (~0666 | st.st_mode) & 0666;
 		file->fd = open(newname,
 		    O_CREAT | O_TRUNC | req->lr_req.tcreate.mode,
 		    mode);

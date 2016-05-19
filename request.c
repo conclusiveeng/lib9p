@@ -145,7 +145,7 @@ l9p_dispatch_request(struct l9p_request *req)
 	req->lr_tag = req->lr_req.hdr.tag;
 
 	handlers = l9p_versions[req->lr_conn->lc_version].handlers;
-	n = l9p_versions[req->lr_conn->lc_version].n_handlers;
+	n = (size_t)l9p_versions[req->lr_conn->lc_version].n_handlers;
 	for (i = 0; i < n; i++) {
 		if (req->lr_req.hdr.type == handlers[i].type) {
 			handlers[i].handler(req);

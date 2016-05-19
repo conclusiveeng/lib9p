@@ -32,7 +32,11 @@
 #include <pthread.h>
 #include <assert.h>
 #include <sys/types.h>
-#include <sys/endian.h>
+#ifdef __APPLE__
+# include "../apple_endian.h"
+#else
+# include <sys/endian.h>
+#endif
 #include <sys/socket.h>
 #include <sys/event.h>
 #include <sys/uio.h>

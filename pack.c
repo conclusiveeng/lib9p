@@ -34,7 +34,11 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/param.h>
-#include <sys/endian.h>
+#ifdef __APPLE__
+# include "apple_endian.h"
+#else
+# include <sys/endian.h>
+#endif
 #include <sys/uio.h>
 #include "lib9p.h"
 #include "lib9p_impl.h"

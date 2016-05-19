@@ -1,5 +1,6 @@
 CFLAGS := \
 	-Weverything \
+	-Wno-reserved-id-macro \
 	-Wno-padded \
 	-Wno-gnu-zero-variadic-macro-arguments \
 	-Wno-format-nonliteral \
@@ -14,6 +15,7 @@ LIB_SRCS := \
 	log.c \
 	hashtable.c \
 	utils.c \
+	rfuncs.c \
 	sbuf/sbuf.c \
 	transport/socket.c \
 	backend/fs.c
@@ -37,7 +39,7 @@ $(SERVER): $(SERVER_OBJS) $(LIB)
 	
 clean:
 	rm -rf build
-	
+	rm -f $(SERVER_OBJS)
 build:
 	mkdir build
 	mkdir build/sbuf

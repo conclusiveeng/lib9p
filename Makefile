@@ -12,5 +12,6 @@ INCS=		lib9p.h
 CFLAGS=		-g -O0
 
 LIBADD=		sbuf
+SUBDIR=		example
 
 .include <bsd.lib.mk>

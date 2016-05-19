@@ -30,7 +30,6 @@
 #include <err.h>
 #include "../lib9p.h"
 #include "../transport/socket.h"
-#include "../backend/fs.h"
 
 int
 main(int argc, const char *argv[])

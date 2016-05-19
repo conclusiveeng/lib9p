@@ -149,7 +149,7 @@ l9p_pu32(struct l9p_message *msg, uint32_t *val)
 		return (l9p_iov_io(msg, &copy, sizeof (uint32_t)));
 	}
 	ret = l9p_iov_io(msg, val, sizeof (uint32_t));
-	*val = htole32(*val);
+	*val = le32toh(*val);
 	return (ret);
 #else
 	return (l9p_iov_io(msg, val, sizeof (uint32_t)));
@@ -168,7 +168,7 @@ l9p_pu64(struct l9p_message *msg, uint64_t *val)
 		return (l9p_iov_io(msg, &copy, sizeof (uint64_t)));
 	}
 	ret = l9p_iov_io(msg, val, sizeof (uint32_t));
-	*val = htole32(*val);
+	*val = le64toh(*val);
 	return (ret);
 #else
 	return (l9p_iov_io(msg, val, sizeof (uint64_t)));

@@ -98,6 +98,11 @@ l9p_start_server(struct l9p_server *server, const char *host, const char *port)
 		listen(s, 10);
 	}
 
+	if (nsockets < 1) {
+		L9P_LOG(L9P_ERROR, "bind(): %s", strerror(errno));
+		return(-1);
+	}
+
 	kq = kqueue();
 
 	if (kevent(kq, kev, nsockets, NULL, 0, NULL) < 0) {

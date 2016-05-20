@@ -36,6 +36,15 @@
 
 #define L9P_MAX_WELEM   256
 
+/*
+ * Function call/reply (Tfoo/Rfoo) numbers.
+ *
+ * These are protocol code numbers, so the exact values
+ * matter.  However, __FIRST and __LAST_PLUS_ONE are for
+ * debug code, and just need to encompass the entire range.
+ *
+ * Note that we rely (in the debug code) on Rfoo == Tfoo+1.
+ */
 enum l9p_ftype {
 	L9P__FIRST = 100,	/* NB: must be first */
 	L9P_TVERSION = 100,

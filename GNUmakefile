@@ -7,6 +7,7 @@ CFLAGS := \
 	-Werror \
 	-g \
 	-O0
+# Note: to turn on debug, use -DL9P_DEBUG=L9P_DEBUG
 
 LIB_SRCS := \
 	pack.c \

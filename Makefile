@@ -11,6 +11,7 @@ SRCS=		pack.c \
 
 INCS=		lib9p.h
 CFLAGS=		-g -O0
+# Note: to turn on debug, use -DL9P_DEBUG=L9P_DEBUG
 
 LIBADD=		sbuf
 SUBDIR=		example

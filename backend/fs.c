@@ -213,46 +213,61 @@ check_access(struct stat *st, uid_t uid, int amode)
 	struct passwd *pwd;
 	int groups[NGROUPS_MAX];
 	int ngroups = NGROUPS_MAX;
-	int i;
+	int i, mask;
 
 	if (uid == 0)
 		return (true);
 
+	/*
+	 * This is a bit dirty (using the well known mode bits instead
+	 * of the S_I[RWX]{USR,GRP,OTH} macros), but lets us be very
+	 * efficient about it.
+	 */
+	switch (amode) {
+	case L9P_ORDWR:
+		mask = 0600;
+		break;
+	case L9P_OREAD:
+		mask = 0400;
+		break;
+	case L9P_OWRITE:
+		mask = 0200;
+		break;
+	case L9P_OEXEC:
+		mask = 0100;
+		break;
+	default:
+		/* probably should not even get here */
+		return (false);
+	}
+
+	/*
+	 * Normal Unix semantics are: apply user permissions first
+	 * and if these fail, reject the request entirely.  Current
+	 * lib9p semantics go on to allow group or other as well.
+	 *
+	 * Also, we check "other" before "group" because group check
+	 * is expensive.  (Perhaps should cache uid -> gid mappings?)
+	 */
 	if (st->st_uid == uid) {
-		if (amode == L9P_OREAD && st->st_mode & S_IRUSR)
-			return (true);
-		
-		if (amode == L9P_OWRITE && st->st_mode & S_IWUSR)
-			return (true);
-		
-		if (amode == L9P_OEXEC && st->st_mode & S_IXUSR)
+		if ((st->st_mode & mask) == mask)
 			return (true);
 	}
 
 	/* Check for "other" access */
-	if (amode == L9P_OREAD && st->st_mode & S_IROTH)
+	mask >>= 6;
+	if ((st->st_mode & mask) == mask)
 		return (true);
 
-	if (amode == L9P_OWRITE && st->st_mode & S_IWOTH)
-		return (true);
-
-	if (amode == L9P_OEXEC && st->st_mode & S_IXOTH)
-		return (true);
-
-	/* Check for group access */
+	/* Check for group access - XXX: not thread safe */
+	mask <<= 3;
 	pwd = getpwuid(uid);
 	getgrouplist(pwd->pw_name, (int)pwd->pw_gid, groups, &ngroups);
 
 	for (i = 0; i < ngroups; i++) {
 		if (st->st_gid == (gid_t)groups[i]) {
-			if (amode == L9P_OREAD && st->st_mode & S_IRGRP)
+			if ((st->st_mode & mask) == mask)
 				return (true);
-
-			if (amode == L9P_OWRITE && st->st_mode & S_IWGRP)
-				return (true);
-
-			if (amode == L9P_OEXEC && st->st_mode & S_IXGRP)
-				return (true);			
 		}
 	}
 

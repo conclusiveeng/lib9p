@@ -36,42 +36,35 @@
 
 #define L9P_MAX_WELEM   256
 
-/*
- * Function call/reply (Tfoo/Rfoo) numbers.
- *
- * The internal values of these do not matter too much,
- * except that Rfoo == Tfoo+1.  There is no error call,
- * but we need L9P_TERROR to maintain the +1 matching.
- */
 enum l9p_ftype {
 	L9P__FIRST = 100,	/* NB: must be first */
-	L9P_TVERSION,
+	L9P_TVERSION = 100,
 	L9P_RVERSION,
-	L9P_TAUTH,
+	L9P_TAUTH = 102,
 	L9P_RAUTH,
-	L9P_TATTACH,
+	L9P_TATTACH = 104,
 	L9P_RATTACH,
-	L9P_TERROR,		/* illegal */
+	L9P_TERROR = 106, /* illegal */
 	L9P_RERROR,
-	L9P_TFLUSH,
+	L9P_TFLUSH = 108,
 	L9P_RFLUSH,
-	L9P_TWALK,
+	L9P_TWALK = 110,
 	L9P_RWALK,
-	L9P_TOPEN,
+	L9P_TOPEN = 112,
 	L9P_ROPEN,
-	L9P_TCREATE,
+	L9P_TCREATE = 114,
 	L9P_RCREATE,
-	L9P_TREAD,
+	L9P_TREAD = 116,
 	L9P_RREAD,
-	L9P_TWRITE,
+	L9P_TWRITE = 118,
 	L9P_RWRITE,
-	L9P_TCLUNK,
+	L9P_TCLUNK = 120,
 	L9P_RCLUNK,
-	L9P_TREMOVE,
+	L9P_TREMOVE = 122,
 	L9P_RREMOVE,
-	L9P_TSTAT,
+	L9P_TSTAT = 124,
 	L9P_RSTAT,
-	L9P_TWSTAT,
+	L9P_TWSTAT = 126,
 	L9P_RWSTAT,
 	L9P__LAST_PLUS_1,	/* NB: must be last */
 };

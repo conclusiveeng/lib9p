@@ -26,6 +26,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 #include <assert.h>
 #include <inttypes.h>
 #include <sys/param.h>
@@ -37,6 +38,12 @@
 #endif
 #include "lib9p.h"
 #include "fcall.h"
+
+static void l9p_describe_fid(const char *, uint32_t, struct sbuf *);
+static void l9p_describe_mode(const char *, uint32_t, struct sbuf *);
+static void l9p_describe_perm(const char *, uint32_t, struct sbuf *);
+static void l9p_describe_qid(const char *, struct l9p_qid *, struct sbuf *);
+static void l9p_describe_stat(const char *, struct l9p_stat *, struct sbuf *);
 
 /*
  * Using indexed initializers, we can have these occur in any order.
@@ -115,26 +122,64 @@ l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length)
 	return (niov);
 }
 
-void
-l9p_describe_qid(struct l9p_qid *qid, struct sbuf *sb)
+/*
+ * Show file ID.
+ */
+static void
+l9p_describe_fid(const char *str, uint32_t fid, struct sbuf *sb)
+{
+
+	sbuf_printf(sb, "%s%" PRIu32, str, fid);
+}
+
+/*
+ * Show file mode (O_RDWR, O_RDONLY, etc) - note that upper bits
+ * may be set for .L open.
+ *
+ * For now we just decode in hex.
+ */
+static void
+l9p_describe_mode(const char *str, uint32_t mode, struct sbuf *sb)
+{
+
+	sbuf_printf(sb, "%s%" PRIx32, str, mode);
+}
+
+/*
+ * Show permissions (rwx etc).
+ */
+static void
+l9p_describe_perm(const char *str, uint32_t mode, struct sbuf *sb)
+{
+	char pbuf[12];
+
+	strmode(mode & 0777, pbuf);
+	sbuf_printf(sb, "%s%" PRIx32 "<%.9s>", str, mode, pbuf + 1);
+}
+
+/*
+ * Show qid (<type, version, path> tuple).
+ */
+static void
+l9p_describe_qid(const char *str, struct l9p_qid *qid, struct sbuf *sb)
 {
 
 	assert(qid != NULL);
 	assert(sb != NULL);
 
-	sbuf_printf(sb, "<0x%02x,%u,0x%016" PRIx64 ">", qid->type, qid->version,
-	    qid->path);
+	sbuf_printf(sb, "%s<0x%02x,%u,0x%016" PRIx64 ">", str,
+	    qid->type, qid->version, qid->path);
 }
 
-void
-l9p_describe_stat(struct l9p_stat *st, struct sbuf *sb)
+static void
+l9p_describe_stat(const char *str, struct l9p_stat *st, struct sbuf *sb)
 {
 
 	assert(st != NULL);
 	assert(sb != NULL);
 
-	sbuf_printf(sb, "type=0x%04x dev=%d name=\"%s\" uid=\"%s\"",
-	    st->type, st->dev, st->name, st->uid);
+	sbuf_printf(sb, "%stype=0x%04x dev=%d name=\"%s\" uid=\"%s\"",
+	    str, st->type, st->dev, st->name, st->uid);
 }
 
 void
@@ -169,14 +214,16 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 		return;
 
 	case L9P_TAUTH:
-		sbuf_printf(sb, "afid=%d uname=\"%s\" aname=\"%s\"", fcall->hdr.fid,
+		l9p_describe_fid(" afid=", fcall->hdr.fid, sb);
+		sbuf_printf(sb, " uname=\"%s\" aname=\"%s\"",
 		    fcall->tauth.uname, fcall->tauth.aname);
 		return;
 
 	case L9P_TATTACH:
-		sbuf_printf(sb, " fid=%d afid=%d uname=\"%s\" aname=\"%s\"",
-		    fcall->hdr.fid, fcall->tattach.afid, fcall->tattach.uname,
-		    fcall->tattach.aname);
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
+		l9p_describe_fid(" afid=", fcall->tattach.afid, sb);
+		sbuf_printf(sb, " uname=\"%s\" aname=\"%s\"",
+		    fcall->tattach.uname, fcall->tattach.aname);
 		if (version >= L9P_2000U)
 			sbuf_printf(sb, " n_uname=%d", fcall->tattach.n_uname);
 		return;
@@ -191,85 +238,84 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 		return;
 
 	case L9P_TWALK:
-		sbuf_printf(sb, " fid=%d newfid=%d wname=\"",
-		    fcall->hdr.fid, fcall->twalk.newfid);
-
-		for (i = 0; i < fcall->twalk.nwname; i++) {
-			sbuf_printf(sb, "%s", fcall->twalk.wname[i]);
-			if (i != fcall->twalk.nwname - 1)
-				sbuf_printf(sb, "/");
-		}
-		sbuf_printf(sb, "\"");
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
+		l9p_describe_fid(" newfid=", fcall->twalk.newfid, sb);
+		sbuf_cat(sb, " wname=\"");
+		for (i = 0; i < fcall->twalk.nwname; i++)
+			sbuf_printf(sb, "%s%s", i == 0 ? "" : "/",
+			    fcall->twalk.wname[i]);
+		sbuf_cat(sb, "\"");
 		return;
 
 	case L9P_RWALK:
 		sbuf_printf(sb, " wqid=[");
-		for (i = 0; i < fcall->rwalk.nwqid; i++) {
-			l9p_describe_qid(&fcall->rwalk.wqid[i], sb);
-			if (i != fcall->rwalk.nwqid - 1)
-				sbuf_printf(sb, ",");
-		}
-		sbuf_printf(sb, "]");
+		for (i = 0; i < fcall->rwalk.nwqid; i++)
+			l9p_describe_qid(i == 0 ? "" : ",",
+			    &fcall->rwalk.wqid[i], sb);
+		sbuf_cat(sb, "]");
 		return;
 
 	case L9P_TOPEN:
-		sbuf_printf(sb, " fid=%d mode=%d", fcall->hdr.fid,
-		    fcall->tcreate.mode);
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
+		l9p_describe_mode(" mode=", fcall->tcreate.mode, sb);
 		return;
 
 	case L9P_ROPEN:
-		sbuf_printf(sb, " qid=");
-		l9p_describe_qid(&fcall->ropen.qid, sb);
+		l9p_describe_qid(" qid=", &fcall->ropen.qid, sb);
 		sbuf_printf(sb, " iounit=%d", fcall->ropen.iounit);
 		return;
 
 	case L9P_TCREATE:
-		sbuf_printf(sb, " fid=%d name=\"%s\" perm=0x%08x mode=%d",
-		    fcall->hdr.fid, fcall->tcreate.name, fcall->tcreate.perm,
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
+		sbuf_printf(sb, " name=\"%s\" perm=0x%08x mode=%d",
+		    fcall->tcreate.name, fcall->tcreate.perm,
 		    fcall->tcreate.mode);
+		l9p_describe_perm(" perm=", fcall->tcreate.perm, sb);
+		l9p_describe_mode(" mode=", fcall->tcreate.mode, sb);
 		return;
 
 	case L9P_RCREATE:
 		return;
 
 	case L9P_TREAD:
-		sbuf_printf(sb, " fid=%d offset=%" PRIu64 " count=%u", fcall->hdr.fid,
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
+		sbuf_printf(sb, " offset=%" PRIu64 " count=%" PRIu32,
 		    fcall->io.offset, fcall->io.count);
 		return;
 
 	case L9P_RREAD:
 	case L9P_RWRITE:
-		sbuf_printf(sb, " count=%d", fcall->io.count);
+		sbuf_printf(sb, " count=%" PRIu32, fcall->io.count);
 		return;
 
 	case L9P_TWRITE:
-		sbuf_printf(sb, " fid=%d offset=%" PRIu64 " count=%u", fcall->hdr.fid,
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
+		sbuf_printf(sb, " offset=%" PRIu64 " count=%" PRIu32,
 		    fcall->io.offset, fcall->io.count);
 		return;
 
 	case L9P_TCLUNK:
-		sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
 		return;
 
 	case L9P_TREMOVE:
-		sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
 		return;
 
 	case L9P_RREMOVE:
 		return;
 
 	case L9P_TSTAT:
-		sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
 		return;
 
 	case L9P_RSTAT:
-		sbuf_printf(sb, " ");
-		l9p_describe_stat(&fcall->rstat.stat, sb);
+		l9p_describe_stat(" ", &fcall->rstat.stat, sb);
 		return;
 
 	case L9P_TWSTAT:
-		sbuf_printf(sb, " fid=%d ", fcall->hdr.fid);
-		l9p_describe_stat(&fcall->twstat.stat, sb);
+		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
+		l9p_describe_stat(" ", &fcall->twstat.stat, sb);
 		return;
 
 	case L9P_RWSTAT:

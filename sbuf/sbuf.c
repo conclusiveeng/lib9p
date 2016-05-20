@@ -45,10 +45,28 @@ sbuf_new_auto()
 
 	s = malloc(sizeof(struct sbuf));
 	s->s_buf = calloc(1, SBUF_INITIAL_SIZE + 1);
-	s->s_capacity = SBUF_INITIAL_SIZE;
+	s->s_capacity = s->s_buf != NULL ? SBUF_INITIAL_SIZE : 0;
 	s->s_size = 0;
 
 	return (s);
+}
+
+int
+sbuf_cat(struct sbuf *s, const char *str)
+{
+	int req = (int)strlen(str);
+
+	if (s->s_size + req >= s->s_capacity) {
+		s->s_capacity = s->s_size + req + 1;
+		s->s_buf = realloc(s->s_buf, (size_t)s->s_capacity);
+	}
+	if (s->s_buf == NULL)
+		return (-1);
+
+	strcpy(s->s_buf + s->s_size, str);
+	s->s_size += req;
+
+	return (0);
 }
 
 int
@@ -78,11 +96,13 @@ sbuf_vprintf(struct sbuf *s, const char *fmt, va_list args)
 		s->s_capacity = s->s_size + req + 1;
 		s->s_buf = realloc(s->s_buf, (size_t)s->s_capacity);
 	}
+	if (s->s_buf == NULL)
+		return (-1);
 
 	req = vsnprintf(s->s_buf + s->s_size, req + 1, fmt, args);
 	s->s_size += req;
 
-	return (req);
+	return (0);
 }
 
 char *
@@ -94,7 +114,8 @@ sbuf_data(struct sbuf *s)
 int
 sbuf_done(struct sbuf *s)
 {
-	s->s_buf[s->s_size] = '\0';
+	if (s->s_buf != NULL)
+		s->s_buf[s->s_size] = '\0';
 	return (0);
 }
 

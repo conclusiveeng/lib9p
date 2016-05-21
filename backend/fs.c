@@ -38,6 +38,7 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/mount.h>
 #include <sys/param.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
@@ -60,6 +61,7 @@
 
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
+static void dostatfs(struct l9p_statfs *, struct statfs *, long);
 static void generate_qid(struct stat *, struct l9p_qid *);
 static void fs_attach(void *, struct l9p_request *);
 static void fs_clunk(void *, struct l9p_request *);
@@ -72,6 +74,7 @@ static void fs_stat(void *, struct l9p_request *);
 static void fs_walk(void *, struct l9p_request *);
 static void fs_write(void *, struct l9p_request *);
 static void fs_wstat(void *, struct l9p_request *);
+static void fs_statfs(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -188,6 +191,20 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
 			    minor(buf->st_rdev));
 		}
 	}
+}
+
+static void dostatfs(struct l9p_statfs *out, struct statfs *in, long namelen)
+{
+
+	out->type = 0;		/* XXX */
+	out->bsize = in->f_bsize;
+	out->blocks = in->f_blocks;
+	out->bfree = in->f_bfree;
+	out->bavail = in->f_bavail;
+	out->files = in->f_files;
+	out->ffree = in->f_ffree;
+	out->fsid = ((uint64_t)in->f_fsid.val[0] << 32) | in->f_fsid.val[1];
+	out->namelen = namelen;
 }
 
 static void
@@ -950,6 +967,31 @@ out:
 }
 
 static void
+fs_statfs(void *softc __unused, struct l9p_request *req)
+{
+	struct openfile *file;
+	struct statfs f;
+	long name_max;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	if (fstatfs(file->fd, &f)) {
+		l9p_respond(req, errno);
+		return;
+	}
+	name_max = fpathconf(file->fd, _PC_NAME_MAX);
+	if (name_max == -1) {
+		l9p_respond(req, errno);
+		return;
+	}
+
+	dostatfs(&req->lr_resp.rstatfs.statfs, &f, name_max);
+
+	l9p_respond(req, 0);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -987,6 +1029,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->walk = fs_walk;
 	backend->write = fs_write;
 	backend->wstat = fs_wstat;
+	backend->statfs = fs_statfs;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

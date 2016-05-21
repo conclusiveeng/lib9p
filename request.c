@@ -56,6 +56,7 @@ static void l9p_dispatch_tstat(struct l9p_request *req);
 static void l9p_dispatch_twalk(struct l9p_request *req);
 static void l9p_dispatch_twrite(struct l9p_request *req);
 static void l9p_dispatch_twstat(struct l9p_request *req);
+static void l9p_dispatch_tstatfs(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -106,7 +107,8 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TREMOVE, l9p_dispatch_tremove},
 	{L9P_TSTAT, l9p_dispatch_tstat},
 	{L9P_TWALK, l9p_dispatch_twalk},
-	{L9P_TWSTAT, l9p_dispatch_twstat}
+	{L9P_TWSTAT, l9p_dispatch_twstat},
+	{L9P_TSTATFS, l9p_dispatch_tstatfs},
 };
 
 /*
@@ -496,4 +498,11 @@ l9p_dispatch_twstat(struct l9p_request *req)
 {
 
 	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->wstat);
+}
+
+static void
+l9p_dispatch_tstatfs(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->statfs);
 }

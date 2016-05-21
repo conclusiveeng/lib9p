@@ -525,6 +525,7 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	case L9P_TCLUNK:
 	case L9P_TSTAT:
 	case L9P_TREMOVE:
+	case L9P_TSTATFS:
 		l9p_pu32(msg, &fcall->hdr.fid);
 		break;
 
@@ -551,6 +552,18 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		break;
 
 	case L9P_RWSTAT:
+		break;
+
+	case L9P_RSTATFS:
+		l9p_pu32(msg, &fcall->rstatfs.statfs.type);
+		l9p_pu32(msg, &fcall->rstatfs.statfs.bsize);
+		l9p_pu64(msg, &fcall->rstatfs.statfs.blocks);
+		l9p_pu64(msg, &fcall->rstatfs.statfs.bfree);
+		l9p_pu64(msg, &fcall->rstatfs.statfs.bavail);
+		l9p_pu64(msg, &fcall->rstatfs.statfs.files);
+		l9p_pu64(msg, &fcall->rstatfs.statfs.ffree);
+		l9p_pu64(msg, &fcall->rstatfs.statfs.fsid);
+		l9p_pu32(msg, &fcall->rstatfs.statfs.namelen);
 		break;
 
 	default:

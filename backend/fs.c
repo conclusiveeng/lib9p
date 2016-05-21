@@ -46,7 +46,6 @@
 #include <pwd.h>
 #include <grp.h>
 #include <libgen.h>
-#include <sys/socket.h>
 #include "../lib9p.h"
 #include "../lib9p_impl.h"
 #include "../log.h"

@@ -105,6 +105,14 @@ struct l9p_openfile {
 	struct l9p_connection *lo_conn;
 };
 
+/* N.B.: these dirents are variable length and for .L only */
+struct l9p_dirent {
+	struct l9p_qid qid;
+	uint64_t offset;
+	uint8_t type;
+	char *name;
+};
+
 struct l9p_connection {
 	struct l9p_server *lc_server;
 	enum l9p_version lc_version;
@@ -150,6 +158,7 @@ ssize_t l9p_pustat(struct l9p_message *msg, struct l9p_stat *s,
 uint16_t l9p_sizeof_stat(struct l9p_stat *stat, enum l9p_version version);
 int l9p_pack_stat(struct l9p_message *msg, struct l9p_request *req,
     struct l9p_stat *s);
+ssize_t l9p_pudirent(struct l9p_message *msg, struct l9p_dirent *de);
 
 int l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend);
 

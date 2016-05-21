@@ -380,6 +380,28 @@ l9p_pustat(struct l9p_message *msg, struct l9p_stat *stat,
 }
 
 /*
+ * Pack or unpack a variable-length dirent.
+ *
+ * If unpacking, the name field is malloc()ed and the caller must
+ * free it.
+ *
+ * Returns the wire-format length, or -1 if we ran out of room.
+ */
+ssize_t
+l9p_pudirent(struct l9p_message *msg, struct l9p_dirent *de)
+{
+	ssize_t r, s;
+
+	r = l9p_puqid(msg, &de->qid);
+	r += l9p_pu64(msg, &de->offset);
+	r += l9p_pu8(msg, &de->type);
+	s = l9p_pustring(msg, &de->name);
+	if (r < QID_SIZE + 8 + 1 || s < 0)
+		return (-1);
+	return (r + s);
+}
+
+/*
  * Pack or unpack a request or response (fcall).
  *
  * Returns 0 on success, -1 on error.  XXX currently assumes there is

@@ -253,6 +253,32 @@ l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
 }
 
 /*
+ * Generic handler for operations that require valid fid.
+ *
+ * Decodes header fid to file, then calls backend function
+ * (*be)(softc, req).  Returns EBADF or ENOSYS if the fid is
+ * invalid or the backend function is not there.
+ */
+static inline void l9p_fid_dispatch(struct l9p_request *req,
+    void (*be)(void *, struct l9p_request *))
+{
+	struct l9p_connection *conn = req->lr_conn;
+
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	if (be == NULL) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	(*be)(conn->lc_server->ls_backend->softc, req);
+}
+
+/*
  * Append variable-size stat object and adjust io count.
  * Returns 0 if the entire stat object was packed, -1 if not.
  * A fully packed object updates the request's io count.
@@ -334,15 +360,9 @@ l9p_dispatch_tattach(struct l9p_request *req)
 static void
 l9p_dispatch_tclunk(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	conn->lc_server->ls_backend->clunk(conn->lc_server->ls_backend->softc, req);
+	/* clunk is not optional but we can still use the generic dispatch */
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->clunk);
 }
 
 static void
@@ -361,39 +381,15 @@ l9p_dispatch_tflush(struct l9p_request *req)
 static void
 l9p_dispatch_tcreate(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->create) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->create(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->create);
 }
 
 static void
 l9p_dispatch_topen(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->open) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->open(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->open);
 }
 
 static void
@@ -422,39 +418,15 @@ l9p_dispatch_tread(struct l9p_request *req)
 static void
 l9p_dispatch_tremove(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->remove) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->remove(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->remove);
 }
 
 static void
 l9p_dispatch_tstat(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->stat) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->stat(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->stat);
 }
 
 static void
@@ -517,18 +489,6 @@ l9p_dispatch_twrite(struct l9p_request *req)
 static void
 l9p_dispatch_twstat(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->wstat) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->wstat(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->wstat);
 }

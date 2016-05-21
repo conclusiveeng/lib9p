@@ -454,9 +454,13 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		break;
 
 	case L9P_ROPEN:
-	case L9P_RCREATE:
 		l9p_puqid(msg, &fcall->ropen.qid);
 		l9p_pu32(msg, &fcall->ropen.iounit);
+		break;
+
+	case L9P_RCREATE:
+		l9p_puqid(msg, &fcall->rcreate.qid);
+		l9p_pu32(msg, &fcall->rcreate.iounit);
 		break;
 
 	case L9P_TCREATE:

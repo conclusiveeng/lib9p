@@ -201,7 +201,7 @@ l9p_respond(struct l9p_request *req, int errnum)
 
 #if defined(L9P_DEBUG)
 	sb = sbuf_new_auto();
-	l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
+	l9p_describe_fcall(&req->lr_resp, conn->lc_version, sb);
 	sbuf_done(sb);
 
 	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));

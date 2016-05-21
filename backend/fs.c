@@ -75,6 +75,8 @@ static void fs_walk(void *, struct l9p_request *);
 static void fs_write(void *, struct l9p_request *);
 static void fs_wstat(void *, struct l9p_request *);
 static void fs_statfs(void *, struct l9p_request *);
+static void fs_lopen(void *, struct l9p_request *);
+static void fs_lcreate(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -991,6 +993,148 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	l9p_respond(req, 0);
 }
 
+/*
+ * Linux O_* flag values do not match BSD ones.
+ * It's not at all clear which flags Linux systems actually pass;
+ * for now, we will just reject most.
+ */
+#define	L_O_CREAT	000000100
+#define	L_O_EXCL	000000200
+#define	L_O_TRUNC	000001000
+#define	L_O_APPEND	000002000	/* ??? should we get this? */
+#define	L_O_DIRECTORY	000200000
+#define	L_O_NOFOLLOW	000400000
+#define	L_O_TMPFILE	020000000	/* ??? should we get this? */
+
+#define	LO_LC_FORBID	(0xfffffffc & ~(L_O_EXCL | L_O_TRUNC))
+
+/*
+ * Common code for LOPEN and LCREATE requests.
+ *
+ * Note that the fid represents the containing directory for
+ * LCREATE, and the file for LOPEN.  The newname argument is NULL
+ * for LOPEN (and the mode and gid are 0).
+ */
+static int
+fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
+	char *newname, uint32_t lflags, uint32_t mode, uint32_t gid,
+	struct stat *stp)
+{
+	struct openfile *file = req->lr_fid->lo_aux;
+	int oflags, oacc;
+
+	assert(file != NULL);
+
+	/* low order bits match BSD; convert to L9P */
+	switch (lflags & O_ACCMODE) {
+	case O_RDONLY:
+		oacc = L9P_OREAD;
+		break;
+	case O_WRONLY:
+		oacc = L9P_OWRITE;
+		break;
+	case O_RDWR:
+		oacc = L9P_ORDWR;
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	if (sc->fs_readonly && (newname || oacc != L9P_OREAD))
+		return (EROFS);
+
+	if (lflags & LO_LC_FORBID) {
+		/* NB: currently includes L_O_CREAT */
+		return (ENOTSUP);
+	}
+
+	if (newname == NULL) {
+		/* open: require access, including write if O_TRUNC */
+		if (lstat(file->name, stp) != 0)
+			return (errno);
+		if ((lflags & L_O_TRUNC) && oacc == L9P_OREAD)
+			oacc = L9P_ORDWR;
+		if (!check_access(stp, file->uid, oacc))
+			return (EPERM);
+		/* ignore O_EXCL, we are not creating */
+
+		/* ?? not sure if this S_ISDIR test is needed */
+		if (S_ISDIR(stp->st_mode))
+			file->dir = opendir(file->name);
+		else {
+			oflags = lflags & O_ACCMODE;
+			if (lflags & L_O_TRUNC)
+				oflags |= O_TRUNC;
+			/* convert L_O_APPEND to O_APPEND? */
+			file->fd = open(file->name, oflags);
+			if (file->fd < 0)
+				return (errno);
+		}
+	} else {
+		/*
+		 * XXX racy, see fs_create.
+		 */
+		if (lstat(file->name, stp) != 0)
+			return (errno);
+		if (!check_access(stp, file->uid, L9P_OWRITE))
+			return (EPERM);
+		oflags = lflags & O_ACCMODE;
+		if (lflags & L_O_TRUNC)
+			oflags |= O_TRUNC;
+		if (lflags & L_O_EXCL)
+			oflags |= O_EXCL;
+		file->fd = open(newname, oflags, mode);
+		if (file->fd < 0)
+			return (errno);
+		if (fchown(file->fd, file->uid, gid) != 0)
+			return (errno);
+	}
+
+	if (fstat(file->fd, stp) != 0)
+		return (errno);
+
+	return (0);
+}
+
+static void
+fs_lopen(void *softc, struct l9p_request *req)
+{
+	struct stat st;
+	int error;
+
+	error = fs_lo_lc(softc, req, NULL, req->lr_req.tlopen.flags, 0, 0, &st);
+	if (error == 0) {
+		generate_qid(&st, &req->lr_resp.rlopen.qid);
+		req->lr_resp.rlopen.iounit = req->lr_conn->lc_max_io_size;
+	}
+	l9p_respond(req, error);
+}
+
+static void
+fs_lcreate(void *softc, struct l9p_request *req)
+{
+	struct openfile *file = req->lr_fid->lo_aux;
+	struct stat st;
+	char *newname;
+	int error;
+
+	if (asprintf(&newname, "%s/%s",
+	    file->name, req->lr_req.tlcreate.name) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+	error = fs_lo_lc(softc, req, newname,
+	    req->lr_req.tlcreate.flags, req->lr_req.tlcreate.mode,
+	    req->lr_req.tlcreate.gid, &st);
+	if (error == 0) {
+		generate_qid(&st, &req->lr_resp.rlcreate.qid);
+		req->lr_resp.rcreate.iounit = req->lr_conn->lc_max_io_size;
+	}
+	free(newname);
+out:
+	l9p_respond(req, error);
+}
+
 static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
@@ -1030,6 +1174,8 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->write = fs_write;
 	backend->wstat = fs_wstat;
 	backend->statfs = fs_statfs;
+	backend->lopen = fs_lopen;
+	backend->lcreate = fs_lcreate;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

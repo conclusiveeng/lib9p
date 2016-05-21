@@ -566,6 +566,29 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pu32(msg, &fcall->rstatfs.statfs.namelen);
 		break;
 
+	case L9P_TLOPEN:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pu32(msg, &fcall->tlopen.flags);
+		break;
+
+	case L9P_RLOPEN:
+		l9p_puqid(msg, &fcall->rlopen.qid);
+		l9p_pu32(msg, &fcall->rlopen.iounit);
+		break;
+
+	case L9P_TLCREATE:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pustring(msg, &fcall->tlcreate.name);
+		l9p_pu32(msg, &fcall->tlcreate.flags);
+		l9p_pu32(msg, &fcall->tlcreate.mode);
+		l9p_pu32(msg, &fcall->tlcreate.gid);
+		break;
+
+	case L9P_RLCREATE:
+		l9p_puqid(msg, &fcall->rlcreate.qid);
+		l9p_pu32(msg, &fcall->rlcreate.iounit);
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);
@@ -632,6 +655,10 @@ l9p_freefcall(union l9p_fcall *fcall)
 
 	case L9P_TWSTAT:
 		l9p_freestat(&fcall->twstat.stat);
+		return;
+
+	case L9P_TLCREATE:
+		free(fcall->tlcreate.name);
 		return;
 	}
 }

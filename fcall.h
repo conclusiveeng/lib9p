@@ -294,10 +294,10 @@ struct l9p_f_tlcreate {
 	uint32_t gid;		/* Tlcreate, Tmkdir */
 };
 
-/* Used for Rlcreate, Rlopen, Rmkdir. */
+/* Used for Rlcreate, Rlopen, Rmkdir, Rsymlink. XXX merge with Ropen */
 struct l9p_f_rlcreate {
 	struct l9p_hdr hdr;
-	struct l9p_qid qid;	/* Rlopen, Rlcreate, Rmkdir */
+	struct l9p_qid qid;	/* Rlopen, Rlcreate, Rmkdir, Rsymlink */
 	uint32_t iounit;	/* Rlopen and Rlcreate only */
 };
 

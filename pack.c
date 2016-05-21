@@ -455,6 +455,10 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 			l9p_pu32(msg, &fcall->error.errnum);
 		break;
 
+	case L9P_RLERROR:
+		l9p_pu32(msg, &fcall->error.errnum);
+		break;
+
 	case L9P_TFLUSH:
 		l9p_pu16(msg, &fcall->tflush.oldtag);
 		break;

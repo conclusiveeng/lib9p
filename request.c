@@ -194,9 +194,14 @@ l9p_respond(struct l9p_request *req, int errnum)
 	if (errnum == 0)
 		req->lr_resp.hdr.type = req->lr_req.hdr.type + 1;
 	else {
-		req->lr_resp.hdr.type = L9P_RERROR;
-		req->lr_resp.error.ename = strerror(errnum);
-		req->lr_resp.error.errnum = (uint32_t)errnum;
+		if (conn->lc_version == L9P_2000L) {
+			req->lr_resp.hdr.type = L9P_RLERROR;
+			req->lr_resp.error.errnum = (uint32_t)errnum;
+		} else {
+			req->lr_resp.hdr.type = L9P_RERROR;
+			req->lr_resp.error.ename = strerror(errnum);
+			req->lr_resp.error.errnum = (uint32_t)errnum;
+		}
 	}
 
 #if defined(L9P_DEBUG)

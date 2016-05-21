@@ -211,7 +211,11 @@ static bool
 check_access(struct stat *st, uid_t uid, int amode)
 {
 	struct passwd *pwd;
+#ifdef __FreeBSD__	/* XXX need better way to determine this */
+	gid_t groups[NGROUPS_MAX];
+#else
 	int groups[NGROUPS_MAX];
+#endif
 	int ngroups = NGROUPS_MAX;
 	int i, mask;
 

@@ -159,8 +159,9 @@ l9p_socket_accept(struct l9p_server *server, int conn_fd,
 	if (err != 0) {
 		L9P_LOG(L9P_WARNING, "cannot look up client name: %s",
 		    gai_strerror(err));
-	} else
+	} else {
 		L9P_LOG(L9P_INFO, "new connection from %s:%s", host, serv);
+	}
 
 	if (l9p_connection_init(server, &conn) != 0) {
 		L9P_LOG(L9P_ERROR, "cannot create new connection");

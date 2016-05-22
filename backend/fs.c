@@ -877,7 +877,13 @@ fs_wstat(void *softc, struct l9p_request *req)
 	if (strlen(l9stat->name) > 0) {
 		char *dir;
 		char *newname;
+		char *tmp;
 
+		/* Forbid renaming root fid. */
+		if (strcmp(file->name, sc->fs_rootpath) == 0) {
+			error = EINVAL;
+			goto out;
+		}
 		dir = r_dirname(file->name, NULL, 0);
 		if (dir == NULL) {
 			error = errno;
@@ -890,6 +896,12 @@ fs_wstat(void *softc, struct l9p_request *req)
 		}
 		if (rename(file->name, newname))
 			error = errno;
+		else {
+			/* Successful rename, update file->name. */
+			tmp = newname;
+			newname = file->name;
+			file->name = tmp;
+		}
 		free(newname);
 		free(dir);
 	}

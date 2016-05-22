@@ -59,6 +59,7 @@ static void l9p_dispatch_twstat(struct l9p_request *req);
 static void l9p_dispatch_tstatfs(struct l9p_request *req);
 static void l9p_dispatch_tlopen(struct l9p_request *req);
 static void l9p_dispatch_tlcreate(struct l9p_request *req);
+static void l9p_dispatch_tsymlink(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -113,6 +114,7 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TSTATFS, l9p_dispatch_tstatfs},
 	{L9P_TLOPEN, l9p_dispatch_tlopen},
 	{L9P_TLCREATE, l9p_dispatch_tlcreate},
+	{L9P_TSYMLINK, l9p_dispatch_tsymlink},
 };
 
 /*
@@ -523,4 +525,11 @@ l9p_dispatch_tlcreate(struct l9p_request *req)
 {
 
 	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lcreate);
+}
+
+static void
+l9p_dispatch_tsymlink(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->symlink);
 }

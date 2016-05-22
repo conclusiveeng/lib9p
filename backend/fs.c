@@ -77,6 +77,7 @@ static void fs_wstat(void *, struct l9p_request *);
 static void fs_statfs(void *, struct l9p_request *);
 static void fs_lopen(void *, struct l9p_request *);
 static void fs_lcreate(void *, struct l9p_request *);
+static void fs_symlink(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -373,10 +374,10 @@ internal_mkdir(char *newname, mode_t mode, struct stat *st)
 }
 
 static inline int
-internal_symlink(struct l9p_request *req, char *newname)
+internal_symlink(char *symtgt, char *newname)
 {
 
-	if (symlink(req->lr_req.tcreate.extension, newname) != 0)
+	if (symlink(symtgt, newname) != 0)
 		return (errno);
 	return (0);
 }
@@ -555,7 +556,8 @@ fs_create(void *softc, struct l9p_request *req)
 	if (req->lr_req.tcreate.perm & L9P_DMDIR)
 		error = internal_mkdir(newname, mode, &st);
 	else if (req->lr_req.tcreate.perm & L9P_DMSYMLINK)
-		error = internal_symlink(req, newname);
+		error = internal_symlink(req->lr_req.tcreate.extension,
+		    newname);
 	else if (req->lr_req.tcreate.perm & L9P_DMNAMEDPIPE)
 		error = internal_mkfifo(newname, mode);
 	else if (req->lr_req.tcreate.perm & L9P_DMSOCKET)
@@ -1135,6 +1137,56 @@ out:
 	l9p_respond(req, error);
 }
 
+/*
+ * Could use a bit more work to reduce code duplication with fs_create.
+ */
+static void
+fs_symlink(void *softc, struct l9p_request *req)
+{
+	struct fs_softc *sc = softc;
+	struct openfile *file;
+	struct stat st;
+	char *newname = NULL;
+	int error;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+	if (lstat(file->name, &st) != 0) {
+		error = errno;
+		goto out;
+	}
+	if (!check_access(&st, file->uid, L9P_OWRITE)) {
+		error = EPERM;
+		goto out;
+	}
+	if (asprintf(&newname, "%s/%s",
+	    file->name, req->lr_req.tsymlink.name) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+	error = internal_symlink(req->lr_req.tsymlink.symtgt, newname);
+	if (error)
+		goto out;
+	if (lchown(newname, file->uid, req->lr_req.tsymlink.gid) != 0) {
+		error = errno;
+		goto out;
+	}
+	if (lstat(newname, &st) != 0) {
+		error = errno;
+		goto out;
+	}
+
+	generate_qid(&st, &req->lr_resp.rsymlink.qid);
+out:
+	free(newname);
+	l9p_respond(req, error);
+}
+
 static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
@@ -1176,6 +1228,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->statfs = fs_statfs;
 	backend->lopen = fs_lopen;
 	backend->lcreate = fs_lcreate;
+	backend->symlink = fs_symlink;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

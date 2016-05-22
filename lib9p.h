@@ -145,7 +145,7 @@ struct l9p_backend {
 
 int l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
     enum l9p_version version);
-int l9p_pustat(struct l9p_message *msg, struct l9p_stat *s,
+ssize_t l9p_pustat(struct l9p_message *msg, struct l9p_stat *s,
     enum l9p_version version);
 uint16_t l9p_sizeof_stat(struct l9p_stat *stat, enum l9p_version version);
 int l9p_pack_stat(struct l9p_message *msg, struct l9p_request *req,

@@ -47,17 +47,24 @@
 #define STRING_SIZE(s)  (L9P_WORD + (s != NULL ? (uint16_t)strlen(s) : 0))
 #define QID_SIZE        (L9P_BYTE + L9P_DWORD + L9P_QWORD)
 
-static int l9p_iov_io(struct l9p_message *, void *, size_t);
-static inline int l9p_pu8(struct l9p_message *, uint8_t *);
-static inline int l9p_pu16(struct l9p_message *, uint16_t *);
-static inline int l9p_pu32(struct l9p_message *, uint32_t *);
-static inline int l9p_pu64(struct l9p_message *, uint64_t *);
-static int l9p_pustring(struct l9p_message *, char **s);
-static int l9p_pustrings(struct l9p_message *, uint16_t *, char *[], size_t);
-static int l9p_puqid(struct l9p_message *, struct l9p_qid *);
-static int l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q);
+static ssize_t l9p_iov_io(struct l9p_message *, void *, size_t);
+static inline ssize_t l9p_pu8(struct l9p_message *, uint8_t *);
+static inline ssize_t l9p_pu16(struct l9p_message *, uint16_t *);
+static inline ssize_t l9p_pu32(struct l9p_message *, uint32_t *);
+static inline ssize_t l9p_pu64(struct l9p_message *, uint64_t *);
+static ssize_t l9p_pustring(struct l9p_message *, char **s);
+static ssize_t l9p_pustrings(struct l9p_message *, uint16_t *, char **, size_t);
+static ssize_t l9p_puqid(struct l9p_message *, struct l9p_qid *);
+static ssize_t l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q);
 
-static int
+/*
+ * Transfer data from incoming request, or to outgoing response,
+ * using msg to track position and direction within request/response.
+ *
+ * Returns the number of bytes actually transferred (which is always
+ * just len itself, converted to signed), or -1 if we ran out of space.
+ */
+static ssize_t
 l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
 {
 	size_t done = 0;
@@ -106,17 +113,27 @@ l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
 	}
 
 	msg->lm_size += done;
-	return ((int)done);
+	return ((ssize_t)done);
 }
 
-static inline int
+/*
+ * Pack or unpack a byte (8 bits).
+ *
+ * Returns 1 (success, 1 byte) or -1 (error).
+ */
+static inline ssize_t
 l9p_pu8(struct l9p_message *msg, uint8_t *val)
 {
 
 	return (l9p_iov_io(msg, val, sizeof (uint8_t)));
 }
 
-static inline int
+/*
+ * Pack or unpack 16-bit value.
+ *
+ * Returns 2 or -1.
+ */
+static inline ssize_t
 l9p_pu16(struct l9p_message *msg, uint16_t *val)
 {
 #if _BYTE_ORDER != _LITTLE_ENDIAN
@@ -127,7 +144,7 @@ l9p_pu16(struct l9p_message *msg, uint16_t *val)
 	 * all away.
 	 */
 	uint16_t copy;
-	int ret;
+	ssize_t ret;
 
 	if (msg->lm_mode == L9P_PACK) {
 		copy = htole16(*val);
@@ -141,12 +158,17 @@ l9p_pu16(struct l9p_message *msg, uint16_t *val)
 #endif
 }
 
-static inline int
+/*
+ * Pack or unpack 32-bit value.
+ *
+ * Returns 4 or -1.
+ */
+static inline ssize_t
 l9p_pu32(struct l9p_message *msg, uint32_t *val)
 {
 #if _BYTE_ORDER != _LITTLE_ENDIAN
 	uint32_t copy;
-	int ret;
+	ssize_t ret;
 
 	if (msg->lm_mode == L9P_PACK) {
 		copy = htole32(*val);
@@ -160,12 +182,17 @@ l9p_pu32(struct l9p_message *msg, uint32_t *val)
 #endif
 }
 
-static inline int
+/*
+ * Pack or unpack 64-bit value.
+ *
+ * Returns 8 or -1.
+ */
+static inline ssize_t
 l9p_pu64(struct l9p_message *msg, uint64_t *val)
 {
 #if _BYTE_ORDER != _LITTLE_ENDIAN
 	uint64_t copy;
-	int ret;
+	ssize_t ret;
 
 	if (msg->lm_mode == L9P_PACK) {
 		copy = htole64(*val);
@@ -179,7 +206,16 @@ l9p_pu64(struct l9p_message *msg, uint64_t *val)
 #endif
 }
 
-static int
+/*
+ * Pack or unpack a string, encoded as 2-byte length followed by
+ * string bytes.  The returned length is 2 greater than the
+ * length of the string itself.
+ *
+ * When unpacking, this allocates a new string (NUL-terminated).
+ *
+ * Return -1 on error (not space, or failed to allocate string).
+ */
+static ssize_t
 l9p_pustring(struct l9p_message *msg, char **s)
 {
 	uint16_t len;
@@ -190,26 +226,55 @@ l9p_pustring(struct l9p_message *msg, char **s)
 	if (l9p_pu16(msg, &len) < 0)
 		return (-1);
 
-	if (msg->lm_mode == L9P_UNPACK)
+	if (msg->lm_mode == L9P_UNPACK) {
 		*s = l9p_calloc(1, len + 1);
+		if (*s == NULL)
+			return (-1);
+	}
 
 	if (l9p_iov_io(msg, *s, len) < 0)
 		return (-1);
 
-	return (len + 2);
+	return ((ssize_t)len + 2);
 }
 
-static int
-l9p_pustrings(struct l9p_message *msg, uint16_t *num, char *strings[],
+/*
+ * Pack or unpack a number (*num) of strings (but at most max of
+ * them).
+ *
+ * Returns the number of bytes transferred, including the packed
+ * number of strings.  If packing and the packed number of strings
+ * was reduced, the original *num value is unchanged; only the
+ * wire-format number is reduced.  If unpacking and the input
+ * number of strings exceeds the max, the incoming *num is reduced
+ * to lim, if needed.  (NOTE ASYMMETRY HERE!)
+ *
+ * Returns -1 on error.
+ */
+static ssize_t
+l9p_pustrings(struct l9p_message *msg, uint16_t *num, char **strings,
     size_t max)
 {
-	size_t i;
-	int ret;
-	int r = 0;
+	size_t i, lim;
+	ssize_t r, ret;
+	uint16_t adjusted;
 
-	l9p_pu16(msg, num);
+	if (msg->lm_mode == L9P_PACK) {
+		lim = *num;
+		if (lim > max)
+			lim = max;
+		adjusted = lim;
+		r = l9p_pu16(msg, &adjusted);
+	} else {
+		r = l9p_pu16(msg, num);
+		lim = *num;
+		if (lim > max)
+			*num = lim = max;
+	}
+	if (r < 0)
+		return (-1);
 
-	for (i = 0; i < MIN(*num, max); i++) {
+	for (i = 0; i < lim; i++) {
 		ret = l9p_pustring(msg, &strings[i]);
 		if (ret < 1)
 			return (-1);
@@ -220,42 +285,71 @@ l9p_pustrings(struct l9p_message *msg, uint16_t *num, char *strings[],
 	return (r);
 }
 
-static int
+/*
+ * Pack or unpack a qid.
+ *
+ * Returns 13 (success) or -1 (error).
+ */
+static ssize_t
 l9p_puqid(struct l9p_message *msg, struct l9p_qid *qid)
 {
-	int r = 0;
+	int r;
+	uint8_t type;
 
-	r += l9p_pu8(msg, (uint8_t *) &qid->type);
-	r += l9p_pu32(msg, &qid->version);
-	r += l9p_pu64(msg, &qid->path);
+	if (msg->lm_mode == L9P_PACK) {
+		type = qid->type;
+		r = l9p_pu8(msg, &type);
+	} else {
+		r = l9p_pu8(msg, &type);
+		qid->type = type;
+	}
+	if (r > 0)
+		r = l9p_pu32(msg, &qid->version);
+	if (r > 0)
+		r = l9p_pu64(msg, &qid->path);
 
-	return (r);
+	return (r > 0 ? QID_SIZE : r);
 }
 
-static int
+/*
+ * Pack or unpack *num qids.
+ *
+ * Returns 2 + 13 * *num (after possibly setting *num), or -1 on error.
+ */
+static ssize_t
 l9p_puqids(struct l9p_message *msg, uint16_t *num, struct l9p_qid *qids)
 {
-	int i, ret, r = 0;
-	l9p_pu16(msg, num);
+	size_t i, lim;
+	ssize_t ret, r;
 
-	for (i = 0; i < *num; i++) {
-		ret = l9p_puqid(msg, &qids[i]);
-		if (ret < 0)
-			return (-1);
-
-		r += ret;
+	r = l9p_pu16(msg, num);
+	if (r > 0) {
+		for (i = 0, lim = *num; i < lim; i++) {
+			ret = l9p_puqid(msg, &qids[i]);
+			if (ret < 0)
+				return (-1);
+			r += ret;
+		}
 	}
-
 	return (r);
 }
 
-int
+/*
+ * Pack or unpack a l9p_stat.
+ *
+ * These have variable size, and the size further depends on
+ * the protocol version.
+ *
+ * Returns the number of bytes packed/unpacked, or -1 on error.
+ */
+ssize_t
 l9p_pustat(struct l9p_message *msg, struct l9p_stat *stat,
     enum l9p_version version)
 {
-	int r = 0;
+	ssize_t r = 0;
 	uint16_t size;
 
+	/* The on-wire size field excludes the size of the size field. */
 	if (msg->lm_mode == L9P_PACK)
 		size = l9p_sizeof_stat(stat, version) - 2;
 
@@ -285,6 +379,12 @@ l9p_pustat(struct l9p_message *msg, struct l9p_stat *stat,
 	return (r);
 }
 
+/*
+ * Pack or unpack a request or response (fcall).
+ *
+ * Returns 0 on success, -1 on error.  XXX currently assumes there is
+ * enough room for messages
+ */
 int
 l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
     enum l9p_version version)
@@ -435,6 +535,10 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	return (0);
 }
 
+/*
+ * Free any strings or other data malloc'ed in the process of
+ * packing or unpacking an fcall.
+ */
 void
 l9p_freefcall(union l9p_fcall *fcall)
 {

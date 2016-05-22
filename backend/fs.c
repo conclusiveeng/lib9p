@@ -78,6 +78,7 @@ static void fs_statfs(void *, struct l9p_request *);
 static void fs_lopen(void *, struct l9p_request *);
 static void fs_lcreate(void *, struct l9p_request *);
 static void fs_symlink(void *, struct l9p_request *);
+static void fs_mknod(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1187,6 +1188,77 @@ out:
 	l9p_respond(req, error);
 }
 
+/*
+ * Could use a bit more work to reduce code duplication.
+ */
+static void
+fs_mknod(void *softc, struct l9p_request *req)
+{
+	struct fs_softc *sc = softc;
+	struct openfile *file;
+	struct stat st;
+	uint32_t mode, major, minor;
+	char *newname = NULL;
+	int error;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+	if (lstat(file->name, &st) != 0) {
+		error = errno;
+		goto out;
+	}
+	if (!check_access(&st, file->uid, L9P_OWRITE)) {
+		error = EPERM;
+		goto out;
+	}
+	if (asprintf(&newname, "%s/%s",
+	    file->name, req->lr_req.tmknod.name) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+
+	mode = req->lr_req.tmknod.mode;
+	major = req->lr_req.tmknod.major;
+	minor = req->lr_req.tmknod.major;
+
+	/*
+	 * For now at least, limit to block and character devs only.
+	 * Probably need to allow fifos eventually.
+	 */
+	switch (mode & S_IFMT) {
+	case S_IFBLK:
+	case S_IFCHR:
+		break;
+	default:
+		error = EINVAL;
+		goto out;
+	}
+	mode = (mode & S_IFMT) | (mode & 0777);	/* ??? */
+	if (mknod(newname, mode, makedev(major, minor)) != 0) {
+		error = errno;
+		goto out;
+	}
+	if (lchown(newname, file->uid, req->lr_req.tsymlink.gid) != 0) {
+		error = errno;
+		goto out;
+	}
+	if (lstat(newname, &st) != 0) {
+		error = errno;
+		goto out;
+	}
+	error = 0;
+
+	generate_qid(&st, &req->lr_resp.rmknod.qid);
+out:
+	free(newname);
+	l9p_respond(req, error);
+}
+
 static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
@@ -1229,6 +1301,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->lopen = fs_lopen;
 	backend->lcreate = fs_lcreate;
 	backend->symlink = fs_symlink;
+	backend->mknod = fs_mknod;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

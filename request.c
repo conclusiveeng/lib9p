@@ -294,6 +294,36 @@ static inline void l9p_fid_dispatch(struct l9p_request *req,
 }
 
 /*
+ * Generic handler for operations that need two fid's.
+ * Note that the 2nd fid must be supplied by the caller; the
+ * corresponding openfile goes into req->lr_f2.
+ */
+static inline void l9p_2fid_dispatch(struct l9p_request *req, uint32_t fid2,
+    void (*be)(void *, struct l9p_request *))
+{
+	struct l9p_connection *conn = req->lr_conn;
+
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	req->lr_fid2 = ht_find(&conn->lc_files, fid2);
+	if (req->lr_fid2 == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	if (be == NULL) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	(*be)(conn->lc_server->ls_backend->softc, req);
+}
+
+/*
  * Append variable-size stat object and adjust io count.
  * Returns 0 if the entire stat object was packed, -1 if not.
  * A fully packed object updates the request's io count.

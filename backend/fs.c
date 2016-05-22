@@ -86,6 +86,7 @@ static void fs_setattr(void *, struct l9p_request *);
 static void fs_xattrwalk(void *, struct l9p_request *);
 static void fs_xattrcreate(void *, struct l9p_request *);
 static void fs_readdir(void *, struct l9p_request *);
+static void fs_fsync(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1622,6 +1623,19 @@ out:
 }
 
 static void
+fs_fsync(void *softc __unused, struct l9p_request *req)
+{
+	struct openfile *file;
+	int error = 0;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+	if (fsync(file->fd))
+		error = errno;
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1671,6 +1685,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->xattrwalk = fs_xattrwalk;
 	backend->xattrcreate = fs_xattrcreate;
 	backend->readdir = fs_readdir;
+	backend->fsync = fs_fsync;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

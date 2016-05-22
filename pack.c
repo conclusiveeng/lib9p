@@ -696,6 +696,13 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	case L9P_RXATTRCREATE:
 		break;
 
+	case L9P_TFSYNC:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		break;
+
+	case L9P_RFSYNC:
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);

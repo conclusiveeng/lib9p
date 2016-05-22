@@ -85,6 +85,7 @@ static void fs_getattr(void *, struct l9p_request *);
 static void fs_setattr(void *, struct l9p_request *);
 static void fs_xattrwalk(void *, struct l9p_request *);
 static void fs_xattrcreate(void *, struct l9p_request *);
+static void fs_readdir(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1557,6 +1558,70 @@ fs_xattrcreate(void *softc __unused, struct l9p_request *req)
 }
 
 static void
+fs_readdir(void *softc __unused, struct l9p_request *req)
+{
+	struct openfile *file;
+	struct l9p_dirent de;
+	struct l9p_message msg;
+	struct dirent *dp;
+	struct stat st;
+	int error = 0;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	if (file->dir == NULL) {
+		error = ENOTDIR;
+		goto out;
+	}
+
+	/*
+	 * There is no getdirentries variant that accepts an
+	 * offset, so once we are multithreaded, this will need
+	 * a lock (which will cover the dirent structures as well).
+	 *
+	 * It's not clear whether we can use the same trick for
+	 * discarding offsets here as we do in fs_read.  It
+	 * probably should work, we'll have to see if some
+	 * client(s) use the zero-offset thing to rescan without
+	 * clunking the directory first.
+	 */
+	if (req->lr_req.io.offset == 0)
+		rewinddir(file->dir);
+	else
+		seekdir(file->dir, req->lr_req.io.offset);
+
+	l9p_init_msg(&msg, req, L9P_PACK);
+	while ((dp = readdir(file->dir)) != NULL) {
+		/*
+		 * Should we skip "." and ".."?  I think so...
+		 */
+		if (dp->d_name[0] == '.' &&
+		    (dp->d_namlen == 1 || strcmp(dp->d_name, "..") == 0))
+			continue;
+
+		/*
+		 * TODO: we do a full lstat here; could use dp->d_*
+		 * to construct the qid more efficiently, as long
+		 * as dp->d_type != DT_UNKNOWN.
+		 */
+		if (fs_lstatat(file, dp->d_name, &st))
+			continue;
+
+		de.qid.type = 0;
+		generate_qid(&st, &de.qid);
+		de.offset = telldir(file->dir);
+		de.type = de.qid.type; /* or dp->d_type? */
+		de.name = dp->d_name;
+
+		if (l9p_pudirent(&msg, &de) < 0)
+			break;
+	}
+out:
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1605,6 +1670,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->setattr = fs_setattr;
 	backend->xattrwalk = fs_xattrwalk;
 	backend->xattrcreate = fs_xattrcreate;
+	backend->readdir = fs_readdir;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

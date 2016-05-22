@@ -503,12 +503,14 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		break;
 
 	case L9P_TREAD:
+	case L9P_TREADDIR:
 		l9p_pu32(msg, &fcall->hdr.fid);
 		l9p_pu64(msg, &fcall->io.offset);
 		l9p_pu32(msg, &fcall->io.count);
 		break;
 
 	case L9P_RREAD:
+	case L9P_RREADDIR:
 		l9p_pu32(msg, &fcall->io.count);
 		break;
 
@@ -713,7 +715,8 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		 */
 		msg->lm_size -= sizeof(uint32_t);
 
-		if (fcall->hdr.type == L9P_RREAD)
+		if (fcall->hdr.type == L9P_RREAD ||
+		    fcall->hdr.type == L9P_RREADDIR)
 			len += fcall->io.count;
 
 		l9p_pu32(msg, &len);

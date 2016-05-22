@@ -67,6 +67,7 @@ static void l9p_dispatch_tgetattr(struct l9p_request *req);
 static void l9p_dispatch_tsetattr(struct l9p_request *req);
 static void l9p_dispatch_txattrwalk(struct l9p_request *req);
 static void l9p_dispatch_txattrcreate(struct l9p_request *req);
+static void l9p_dispatch_treaddir(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -129,6 +130,7 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TSETATTR, l9p_dispatch_tsetattr},
 	{L9P_TXATTRWALK, l9p_dispatch_txattrwalk},
 	{L9P_TXATTRCREATE, l9p_dispatch_txattrcreate},
+	{L9P_TREADDIR, l9p_dispatch_treaddir},
 };
 
 /*
@@ -242,8 +244,9 @@ l9p_respond(struct l9p_request *req, int errnum)
 
 	iosize = req->lr_resp_msg.lm_size;
 
-	/* Include I/O size in calculation for Rread response */
-	if (req->lr_resp.hdr.type == L9P_RREAD)
+	/* Include I/O size in calculation for Rread and Rreaddir responses */
+	if (req->lr_resp.hdr.type == L9P_RREAD ||
+	    req->lr_resp.hdr.type == L9P_RREADDIR)
 		iosize += req->lr_resp.io.count;
 
 	conn->lc_send_response(req, req->lr_resp_msg.lm_iov,
@@ -331,6 +334,34 @@ static inline void l9p_2fid_dispatch(struct l9p_request *req, uint32_t fid2,
 		l9p_respond(req, ENOSYS);
 		return;
 	}
+
+	(*be)(conn->lc_server->ls_backend->softc, req);
+}
+
+/*
+ * Generic handler for read-like operations (read and readdir).
+ *
+ * Backend function must exist.
+ */
+static inline void l9p_read_dispatch(struct l9p_request *req,
+    void (*be)(void *, struct l9p_request *))
+{
+	struct l9p_connection *conn = req->lr_conn;
+
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (!req->lr_fid) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	/*
+	 * Adjust so that writing messages (packing data) starts
+	 * right after the count field in the response.
+	 *
+	 * size[4] + Rread(dir)[1] + tag[2] + count[4] = 11
+	 */
+	l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
+	    req->lr_data_iov, &req->lr_data_niov, 11);
 
 	(*be)(conn->lc_server->ls_backend->softc, req);
 }
@@ -452,24 +483,8 @@ l9p_dispatch_topen(struct l9p_request *req)
 static void
 l9p_dispatch_tread(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	/*
-	 * Adjust so that writing messages (packing data) starts
-	 * right after the count field in the response.
-	 *
-	 * size[4] + Rread[1] + tag[2] + count[4] = 11
-	 */
-	l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
-	    req->lr_data_iov, &req->lr_data_niov, 11);
-
-	conn->lc_server->ls_backend->read(conn->lc_server->ls_backend->softc, req);
+	l9p_read_dispatch(req, req->lr_conn->lc_server->ls_backend->read);
 }
 
 static void
@@ -658,4 +673,11 @@ l9p_dispatch_txattrcreate(struct l9p_request *req)
 {
 
 	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->xattrcreate);
+}
+
+static void
+l9p_dispatch_treaddir(struct l9p_request *req)
+{
+
+	l9p_read_dispatch(req, req->lr_conn->lc_server->ls_backend->readdir);
 }

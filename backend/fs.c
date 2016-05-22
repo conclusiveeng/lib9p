@@ -80,6 +80,7 @@ static void fs_lcreate(void *, struct l9p_request *);
 static void fs_symlink(void *, struct l9p_request *);
 static void fs_mknod(void *, struct l9p_request *);
 static void fs_rename(void *, struct l9p_request *);
+static void fs_readlink(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1334,6 +1335,27 @@ out:
 }
 
 static void
+fs_readlink(void *softc __unused, struct l9p_request *req)
+{
+	struct openfile *file;
+	ssize_t linklen;
+	char buf[MAXPATHLEN + 1];
+	int error = 0;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	linklen = readlink(file->name, buf, sizeof(buf));
+	if (linklen < 0)
+		error = errno;
+	else if (linklen > MAXPATHLEN)
+		error = ENOMEM; /* todo: allocate dynamically */
+	else if ((req->lr_resp.rreadlink.target = strdup(buf)) == NULL)
+		error = ENOMEM;
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1377,6 +1399,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->symlink = fs_symlink;
 	backend->mknod = fs_mknod;
 	backend->rename = fs_rename;
+	backend->readlink = fs_readlink;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

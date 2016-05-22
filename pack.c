@@ -613,6 +613,15 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_puqid(msg, &fcall->rmknod.qid);
 		break;
 
+	case L9P_TRENAME:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pu32(msg, &fcall->trename.dfid);
+		l9p_pustring(msg, &fcall->trename.name);
+		break;
+
+	case L9P_RRENAME:
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);
@@ -692,6 +701,10 @@ l9p_freefcall(union l9p_fcall *fcall)
 
 	case L9P_TMKNOD:
 		free(fcall->tmknod.name);
+		return;
+
+	case L9P_TRENAME:
+		free(fcall->trename.name);
 		return;
 	}
 }

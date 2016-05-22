@@ -79,6 +79,7 @@ static void fs_lopen(void *, struct l9p_request *);
 static void fs_lcreate(void *, struct l9p_request *);
 static void fs_symlink(void *, struct l9p_request *);
 static void fs_mknod(void *, struct l9p_request *);
+static void fs_rename(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1260,6 +1261,79 @@ out:
 }
 
 static void
+fs_rename(void *softc, struct l9p_request *req)
+{
+	struct fs_softc *sc = softc;
+	struct openfile *file, *f2;
+	struct stat st;
+	char *olddirname = NULL, *newname = NULL, *swtmp;
+	int error;
+
+	/*
+	 * Note: lr_fid represents the file that is to be renamed,
+	 * so we must locate its parent directory and verify that
+	 * both this parent directory and the new directory f2 are
+	 * writable.
+	 */
+	file = req->lr_fid->lo_aux;
+	f2 = req->lr_fid2->lo_aux;
+	assert(file && f2);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+	/* Client probably should not attempt to rename root. */
+	if (strcmp(file->name, sc->fs_rootpath) == 0) {
+		error = EINVAL;
+		goto out;
+	}
+	olddirname = r_dirname(file->name, NULL, 0);
+	if (olddirname == NULL) {
+		error = errno;
+		goto out;
+	}
+	if (lstat(olddirname, &st) != 0) {
+		error = errno;
+		goto out;
+	}
+	if (!check_access(&st, file->uid, L9P_OWRITE)) {
+		error = EPERM;
+		goto out;
+	}
+	if (strcmp(olddirname, f2->name) != 0) {
+		if (lstat(f2->name, &st) != 0) {
+			error = errno;
+			goto out;
+		}
+		if (!check_access(&st, f2->uid, L9P_OWRITE)) {
+			error = EPERM;
+			goto out;
+		}
+	}
+	if (asprintf(&newname, "%s/%s",
+	    f2->name, req->lr_req.trename.name) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+
+	if (rename(file->name, newname) != 0) {
+		error = errno;
+		goto out;
+	}
+	/* file has been renamed but old fid is not clunked */
+	swtmp = newname;
+	newname = file->name;
+	file->name = swtmp;
+	error = 0;
+
+out:
+	free(newname);
+	free(olddirname);
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1302,6 +1376,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->lcreate = fs_lcreate;
 	backend->symlink = fs_symlink;
 	backend->mknod = fs_mknod;
+	backend->rename = fs_rename;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

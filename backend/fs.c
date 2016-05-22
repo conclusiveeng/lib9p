@@ -83,6 +83,8 @@ static void fs_rename(void *, struct l9p_request *);
 static void fs_readlink(void *, struct l9p_request *);
 static void fs_getattr(void *, struct l9p_request *);
 static void fs_setattr(void *, struct l9p_request *);
+static void fs_xattrwalk(void *, struct l9p_request *);
+static void fs_xattrcreate(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1543,6 +1545,18 @@ out:
 }
 
 static void
+fs_xattrwalk(void *softc __unused, struct l9p_request *req)
+{
+	l9p_respond(req, ENOTSUP);
+}
+
+static void
+fs_xattrcreate(void *softc __unused, struct l9p_request *req)
+{
+	l9p_respond(req, ENOTSUP);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1589,6 +1603,8 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->readlink = fs_readlink;
 	backend->getattr = fs_getattr;
 	backend->setattr = fs_setattr;
+	backend->xattrwalk = fs_xattrwalk;
+	backend->xattrcreate = fs_xattrcreate;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

@@ -674,6 +674,26 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	case L9P_RSETATTR:
 		break;
 
+	case L9P_TXATTRWALK:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pu32(msg, &fcall->txattrwalk.newfid);
+		l9p_pustring(msg, &fcall->txattrwalk.name);
+		break;
+
+	case L9P_RXATTRWALK:
+		l9p_pu64(msg, &fcall->rxattrwalk.size);
+		break;
+
+	case L9P_TXATTRCREATE:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pustring(msg, &fcall->txattrcreate.name);
+		l9p_pu64(msg, &fcall->txattrcreate.attr_size);
+		l9p_pu32(msg, &fcall->txattrcreate.flags);
+		break;
+
+	case L9P_RXATTRCREATE:
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);
@@ -761,6 +781,14 @@ l9p_freefcall(union l9p_fcall *fcall)
 
 	case L9P_RREADLINK:
 		free(fcall->rreadlink.target);
+		return;
+
+	case L9P_TXATTRWALK:
+		free(fcall->txattrwalk.name);
+		return;
+
+	case L9P_TXATTRCREATE:
+		free(fcall->txattrcreate.name);
 		return;
 	}
 }

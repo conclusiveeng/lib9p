@@ -65,6 +65,8 @@ static void l9p_dispatch_trename(struct l9p_request *req);
 static void l9p_dispatch_treadlink(struct l9p_request *req);
 static void l9p_dispatch_tgetattr(struct l9p_request *req);
 static void l9p_dispatch_tsetattr(struct l9p_request *req);
+static void l9p_dispatch_txattrwalk(struct l9p_request *req);
+static void l9p_dispatch_txattrcreate(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -125,6 +127,8 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TREADLINK, l9p_dispatch_treadlink},
 	{L9P_TGETATTR, l9p_dispatch_tgetattr},
 	{L9P_TSETATTR, l9p_dispatch_tsetattr},
+	{L9P_TXATTRWALK, l9p_dispatch_txattrwalk},
+	{L9P_TXATTRCREATE, l9p_dispatch_txattrcreate},
 };
 
 /*
@@ -200,10 +204,10 @@ l9p_respond(struct l9p_request *req, int errnum)
 		break;
 
 	case L9P_TWALK:
+	case L9P_TXATTRWALK:
 		if (errnum != 0 && req->lr_newfid != NULL &&
 		    req->lr_newfid != req->lr_fid)
 			l9p_connection_remove_fid(conn, req->lr_newfid);
-
 		break;
 	}
 
@@ -608,4 +612,50 @@ l9p_dispatch_tsetattr(struct l9p_request *req)
 {
 
 	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->setattr);
+}
+
+static void
+l9p_dispatch_txattrwalk(struct l9p_request *req)
+{
+	struct l9p_connection *conn = req->lr_conn;
+
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	/*
+	 * XXX
+	 *
+	 * We need a way to mark a fid as used-for-xattr.  (Or
+	 * maybe these xattr fids should be completely separate
+	 * from file/directory fids?)
+	 *
+	 * For now, this relies on the backend always failing the
+	 * operation.
+	 */
+	if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
+		req->lr_newfid = l9p_connection_alloc_fid(conn,
+		    req->lr_req.twalk.newfid);
+		if (req->lr_newfid == NULL) {
+			l9p_respond(req, EBADF);
+			return;
+		}
+	}
+
+	if (!conn->lc_server->ls_backend->xattrwalk) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	conn->lc_server->ls_backend->xattrwalk(
+	    conn->lc_server->ls_backend->softc, req);
+}
+
+static void
+l9p_dispatch_txattrcreate(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->xattrcreate);
 }

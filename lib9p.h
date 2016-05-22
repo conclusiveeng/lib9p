@@ -87,7 +87,6 @@ struct l9p_request {
 	uint32_t lr_tag;
 	struct l9p_message lr_req_msg;
 	struct l9p_message lr_resp_msg;
-	struct l9p_message lr_readdir_msg;
 	union l9p_fcall lr_req;
 	union l9p_fcall lr_resp;
 	struct l9p_openfile *lr_fid;
@@ -149,7 +148,8 @@ int l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 int l9p_pustat(struct l9p_message *msg, struct l9p_stat *s,
     enum l9p_version version);
 uint16_t l9p_sizeof_stat(struct l9p_stat *stat, enum l9p_version version);
-int l9p_pack_stat(struct l9p_request *req, struct l9p_stat *s);
+int l9p_pack_stat(struct l9p_message *msg, struct l9p_request *req,
+    struct l9p_stat *s);
 
 int l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend);
 
@@ -171,6 +171,8 @@ void l9p_connection_remove_fid(struct l9p_connection *conn,
 void l9p_dispatch_request(struct l9p_request *req);
 void l9p_respond(struct l9p_request *req, int errnum);
 
+void l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
+    enum l9p_pack_mode mode);
 void l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,
     size_t *niov2, size_t seek);
 size_t l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length);

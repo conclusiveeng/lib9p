@@ -635,21 +635,40 @@ fs_read(void *softc __unused, struct l9p_request *req)
 	if (file->dir != NULL) {
 		struct dirent *d;
 		struct stat st;
+		struct l9p_message msg;
+		long o;
 
+		/*
+		 * Must use telldir before readdir since seekdir
+		 * takes cookie values.  Unfortunately this wastes
+		 * a lot of time (and memory) building unneeded
+		 * cookies that can only be flushed by closing
+		 * the directory.
+		 *
+		 * NB: FreeBSD libc seekdir has SINGLEUSE defined,
+		 * so in fact, we can discard the cookies by
+		 * calling seekdir on them.  This clears up wasted
+		 * memory at the cost of even more wasted time...
+		 *
+		 * XXX: readdir/telldir/seekdir not thread safe
+		 */
+		l9p_init_msg(&msg, req, L9P_PACK);
 		for (;;) {
+			o = telldir(file->dir);
 			d = readdir(file->dir);
-			if (d) {
-				lstat(d->d_name, &st);
-				dostat(&l9stat, d->d_name, &st, dotu);
-				if (l9p_pack_stat(req, &l9stat) != 0) {
-					seekdir(file->dir, -1);
-					break;
-				}
-
+			if (d == NULL)
+				break;
+			if (lstat(d->d_name, &st))
 				continue;
+			dostat(&l9stat, d->d_name, &st, dotu);
+			if (l9p_pack_stat(&msg, req, &l9stat) != 0) {
+				seekdir(file->dir, o);
+				break;
 			}
-
-			break;
+#if defined(__FreeBSD__)
+			seekdir(file->dir, o);
+			(void) readdir(file->dir);
+#endif
 		}
 	} else {
 		size_t niov = l9p_truncate_iov(req->lr_data_iov,

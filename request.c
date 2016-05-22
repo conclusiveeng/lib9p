@@ -27,6 +27,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include <errno.h>
 #include <sys/param.h>
 #include <sys/uio.h>
@@ -227,34 +228,58 @@ out:
 	free(req);
 }
 
+/*
+ * This allows a caller to iterate through the data in a
+ * read or write request (creating the data if packing,
+ * scanning through it if unpacking).  This is used for
+ * writing readdir entries, so mode should be L9P_PACK
+ * (but we allow L9P_UNPACK so that debug code can also scan
+ * through the data later, if desired).
+ *
+ * This relies on the Tread op having positioned the request's
+ * iov to the beginning of the data buffer (note the l9p_seek_iov
+ * in l9p_dispatch_tread).
+ */
+void
+l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
+    enum l9p_pack_mode mode)
+{
+
+	msg->lm_size = 0;
+	msg->lm_mode = mode;
+	msg->lm_niov = req->lr_data_niov;
+	memcpy(msg->lm_iov, req->lr_data_iov,
+	    sizeof (struct iovec) * req->lr_data_niov);
+}
+
+/*
+ * Append variable-size stat object and adjust io count.
+ * Returns 0 if the entire stat object was packed, -1 if not.
+ * A fully packed object updates the request's io count.
+ *
+ * Caller must use their own private l9p_message object since
+ * a partially packed object will leave the message object in
+ * a useless state.
+ *
+ * Frees the stat object.
+ */
 int
-l9p_pack_stat(struct l9p_request *req, struct l9p_stat *st)
+l9p_pack_stat(struct l9p_message *msg, struct l9p_request *req,
+    struct l9p_stat *st)
 {
 	struct l9p_connection *conn = req->lr_conn;
-	struct l9p_message *msg = &req->lr_readdir_msg;
 	uint16_t size = l9p_sizeof_stat(st, conn->lc_version);
+	int ret = 0;
 
-	if (msg->lm_size == 0) {
-		/* Initialize message */
-		msg->lm_mode = L9P_PACK;
-		msg->lm_niov = req->lr_data_niov;
-		memcpy(msg->lm_iov, req->lr_data_iov,
-		    sizeof (struct iovec) * req->lr_data_niov);
-	}
+	assert(msg->lm_mode == L9P_PACK);
 
-	if (req->lr_resp.io.count + size > req->lr_req.io.count) {
-		l9p_freestat(st);
-		return (-1);
-	}
-
-	if (l9p_pustat(msg, st, conn->lc_version) < 0) {
-		l9p_freestat(st);
-		return (-1);
-	}
-
-	req->lr_resp.io.count += size;
+	if (req->lr_resp.io.count + size > req->lr_req.io.count ||
+	    l9p_pustat(msg, st, conn->lc_version) < 0)
+		ret = -1;
+	else
+		req->lr_resp.io.count += size;
 	l9p_freestat(st);
-	return (0);
+	return (ret);
 }
 
 static void
@@ -382,6 +407,12 @@ l9p_dispatch_tread(struct l9p_request *req)
 		return;
 	}
 
+	/*
+	 * Adjust so that writing messages (packing data) starts
+	 * right after the count field in the response.
+	 *
+	 * size[4] + Rread[1] + tag[2] + count[4] = 11
+	 */
 	l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
 	    req->lr_data_iov, &req->lr_data_niov, 11);
 
@@ -470,6 +501,13 @@ l9p_dispatch_twrite(struct l9p_request *req)
 		return;
 	}
 
+	/*
+	 * Adjust to point to the data to be written (a la
+	 * l9p_dispatch_tread, but we're pointing into the request
+	 * buffer rather than the response):
+	 *
+	 * size[4] + Twrite[1] + tag[2] + fid[4] + offset[8] count[4] = 23
+	 */
 	l9p_seek_iov(req->lr_req_msg.lm_iov, req->lr_req_msg.lm_niov,
 	    req->lr_data_iov, &req->lr_data_niov, 23);
 

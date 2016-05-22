@@ -42,6 +42,7 @@
 #include <sys/uio.h>
 #include "lib9p.h"
 #include "lib9p_impl.h"
+#include "log.h"
 
 #define N(ary)          (sizeof(ary) / sizeof(*ary))
 #define STRING_SIZE(s)  (L9P_WORD + (s != NULL ? (uint16_t)strlen(s) : 0))
@@ -436,10 +437,6 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_puqid(msg, &fcall->rauth.aqid);
 		break;
 
-	case L9P_RATTACH:
-		l9p_puqid(msg, &fcall->rattach.qid);
-		break;
-
 	case L9P_TATTACH:
 		l9p_pu32(msg, &fcall->hdr.fid);
 		l9p_pu32(msg, &fcall->tattach.afid);
@@ -447,6 +444,10 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pustring(msg, &fcall->tattach.aname);
 		if (version == L9P_2000U)
 			l9p_pu32(msg, &fcall->tattach.n_uname);
+		break;
+
+	case L9P_RATTACH:
+		l9p_puqid(msg, &fcall->rattach.qid);
 		break;
 
 	case L9P_RERROR:
@@ -461,6 +462,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TFLUSH:
 		l9p_pu16(msg, &fcall->tflush.oldtag);
+		break;
+
+	case L9P_RFLUSH:
 		break;
 
 	case L9P_TWALK:
@@ -484,11 +488,6 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pu32(msg, &fcall->ropen.iounit);
 		break;
 
-	case L9P_RCREATE:
-		l9p_puqid(msg, &fcall->rcreate.qid);
-		l9p_pu32(msg, &fcall->rcreate.iounit);
-		break;
-
 	case L9P_TCREATE:
 		l9p_pu32(msg, &fcall->hdr.fid);
 		l9p_pustring(msg, &fcall->tcreate.name);
@@ -496,6 +495,11 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pu8(msg, &fcall->tcreate.mode);
 		if (version == L9P_2000U)
 			l9p_pustring(msg, &fcall->tcreate.extension);
+		break;
+
+	case L9P_RCREATE:
+		l9p_puqid(msg, &fcall->rcreate.qid);
+		l9p_pu32(msg, &fcall->rcreate.iounit);
 		break;
 
 	case L9P_TREAD:
@@ -524,6 +528,10 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pu32(msg, &fcall->hdr.fid);
 		break;
 
+	case L9P_RCLUNK:
+	case L9P_RREMOVE:
+		break;
+
 	case L9P_RSTAT:
 	{
 		uint16_t size = l9p_sizeof_stat(&fcall->rstat.stat,
@@ -540,6 +548,14 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pu16(msg, &size);
 		l9p_pustat(msg, &fcall->twstat.stat, version);
 	}
+		break;
+
+	case L9P_RWSTAT:
+		break;
+
+	default:
+		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
+		    __func__, fcall->hdr.type);
 		break;
 	}
 

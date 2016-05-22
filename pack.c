@@ -630,6 +630,50 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pustring(msg, &fcall->rreadlink.target);
 		break;
 
+	case L9P_TGETATTR:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pu64(msg, &fcall->tgetattr.request_mask);
+		break;
+
+	case L9P_RGETATTR:
+		l9p_pu64(msg, &fcall->rgetattr.valid);
+		l9p_puqid(msg, &fcall->rgetattr.qid);
+		l9p_pu32(msg, &fcall->rgetattr.mode);
+		l9p_pu32(msg, &fcall->rgetattr.uid);
+		l9p_pu32(msg, &fcall->rgetattr.gid);
+		l9p_pu64(msg, &fcall->rgetattr.nlink);
+		l9p_pu64(msg, &fcall->rgetattr.rdev);
+		l9p_pu64(msg, &fcall->rgetattr.size);
+		l9p_pu64(msg, &fcall->rgetattr.blksize);
+		l9p_pu64(msg, &fcall->rgetattr.blocks);
+		l9p_pu64(msg, &fcall->rgetattr.atime_sec);
+		l9p_pu64(msg, &fcall->rgetattr.atime_nsec);
+		l9p_pu64(msg, &fcall->rgetattr.mtime_sec);
+		l9p_pu64(msg, &fcall->rgetattr.mtime_nsec);
+		l9p_pu64(msg, &fcall->rgetattr.ctime_sec);
+		l9p_pu64(msg, &fcall->rgetattr.ctime_nsec);
+		l9p_pu64(msg, &fcall->rgetattr.btime_sec);
+		l9p_pu64(msg, &fcall->rgetattr.btime_nsec);
+		l9p_pu64(msg, &fcall->rgetattr.gen);
+		l9p_pu64(msg, &fcall->rgetattr.data_version);
+		break;
+
+	case L9P_TSETATTR:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pu32(msg, &fcall->tsetattr.valid);
+		l9p_pu32(msg, &fcall->tsetattr.mode);
+		l9p_pu32(msg, &fcall->tsetattr.uid);
+		l9p_pu32(msg, &fcall->tsetattr.gid);
+		l9p_pu64(msg, &fcall->tsetattr.size);
+		l9p_pu64(msg, &fcall->tsetattr.atime_sec);
+		l9p_pu64(msg, &fcall->tsetattr.mtime_nsec);
+		l9p_pu64(msg, &fcall->tsetattr.atime_sec);
+		l9p_pu64(msg, &fcall->tsetattr.mtime_nsec);
+		break;
+
+	case L9P_RSETATTR:
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);

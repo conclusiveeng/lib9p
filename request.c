@@ -63,6 +63,8 @@ static void l9p_dispatch_tsymlink(struct l9p_request *req);
 static void l9p_dispatch_tmknod(struct l9p_request *req);
 static void l9p_dispatch_trename(struct l9p_request *req);
 static void l9p_dispatch_treadlink(struct l9p_request *req);
+static void l9p_dispatch_tgetattr(struct l9p_request *req);
+static void l9p_dispatch_tsetattr(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -121,6 +123,8 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TMKNOD, l9p_dispatch_tmknod},
 	{L9P_TRENAME, l9p_dispatch_trename},
 	{L9P_TREADLINK, l9p_dispatch_treadlink},
+	{L9P_TGETATTR, l9p_dispatch_tgetattr},
+	{L9P_TSETATTR, l9p_dispatch_tsetattr},
 };
 
 /*
@@ -590,4 +594,18 @@ l9p_dispatch_treadlink(struct l9p_request *req)
 {
 
 	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->readlink);
+}
+
+static void
+l9p_dispatch_tgetattr(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->getattr);
+}
+
+static void
+l9p_dispatch_tsetattr(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->setattr);
 }

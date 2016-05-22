@@ -81,6 +81,8 @@ static void fs_symlink(void *, struct l9p_request *);
 static void fs_mknod(void *, struct l9p_request *);
 static void fs_rename(void *, struct l9p_request *);
 static void fs_readlink(void *, struct l9p_request *);
+static void fs_getattr(void *, struct l9p_request *);
+static void fs_setattr(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1356,6 +1358,191 @@ fs_readlink(void *softc __unused, struct l9p_request *req)
 }
 
 static void
+fs_getattr(void *softc __unused, struct l9p_request *req)
+{
+	uint64_t mask, valid;
+	struct openfile *file;
+	struct stat st;
+	int error = 0;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	valid = 0;
+	if (lstat(file->name, &st)) {
+		error = errno;
+		goto out;
+	}
+	/* ?? Can we provide items not-requested? If so, can skip tests. */
+	mask = req->lr_req.tgetattr.request_mask;
+	if (mask & L9PL_GETATTR_MODE) {
+		/* It is not clear if we need any translations. */
+		req->lr_resp.rgetattr.mode = st.st_mode;
+		valid |= L9PL_GETATTR_MODE;
+	}
+	if (mask & L9PL_GETATTR_NLINK) {
+		req->lr_resp.rgetattr.nlink = st.st_nlink;
+		valid |= L9PL_GETATTR_NLINK;
+	}
+	if (mask & L9PL_GETATTR_UID) {
+		/* provide st_uid, or file->uid? */
+		req->lr_resp.rgetattr.uid = st.st_uid;
+		valid |= L9PL_GETATTR_UID;
+	}
+	if (mask & L9PL_GETATTR_GID) {
+		/* provide st_gid, or file->gid? */
+		req->lr_resp.rgetattr.gid = st.st_gid;
+		valid |= L9PL_GETATTR_GID;
+	}
+	if (mask & L9PL_GETATTR_RDEV) {
+		/* It is not clear if we need any translations. */
+		req->lr_resp.rgetattr.rdev = st.st_rdev;
+		valid |= L9PL_GETATTR_RDEV;
+	}
+	if (mask & L9PL_GETATTR_ATIME) {
+		req->lr_resp.rgetattr.atime_sec = st.st_atimespec.tv_sec;
+		req->lr_resp.rgetattr.atime_nsec = st.st_atimespec.tv_nsec;
+		valid |= L9PL_GETATTR_ATIME;
+	}
+	if (mask & L9PL_GETATTR_MTIME) {
+		req->lr_resp.rgetattr.mtime_sec = st.st_mtimespec.tv_sec;
+		req->lr_resp.rgetattr.mtime_nsec = st.st_mtimespec.tv_nsec;
+		valid |= L9PL_GETATTR_MTIME;
+	}
+	if (mask & L9PL_GETATTR_CTIME) {
+		req->lr_resp.rgetattr.ctime_sec = st.st_ctimespec.tv_sec;
+		req->lr_resp.rgetattr.ctime_nsec = st.st_ctimespec.tv_nsec;
+		valid |= L9PL_GETATTR_CTIME;
+	}
+	if (mask & L9PL_GETATTR_BTIME) {
+		req->lr_resp.rgetattr.btime_sec = st.st_birthtim.tv_sec;
+		req->lr_resp.rgetattr.btime_nsec = st.st_birthtim.tv_nsec;
+		valid |= L9PL_GETATTR_BTIME;
+	}
+	if (mask & L9PL_GETATTR_INO)
+		valid |= L9PL_GETATTR_INO;
+	if (mask & L9PL_GETATTR_SIZE) {
+		req->lr_resp.rgetattr.size = st.st_size;
+		valid |= L9PL_GETATTR_SIZE;
+	}
+	if (mask & L9PL_GETATTR_BLOCKS) {
+		req->lr_resp.rgetattr.blksize = st.st_blksize;
+		req->lr_resp.rgetattr.blocks = st.st_blocks;
+		valid |= L9PL_GETATTR_BLOCKS;
+	}
+	if (mask & L9PL_GETATTR_GEN) {
+		req->lr_resp.rgetattr.gen = st.st_gen;
+		valid |= L9PL_GETATTR_GEN;
+	}
+	/* don't know what to do with data version yet */
+
+	generate_qid(&st, &req->lr_resp.rgetattr.qid);
+out:
+	req->lr_req.rgetattr.valid = valid;
+	l9p_respond(req, error);
+}
+
+/*
+ * Should combine some of this with wstat code.
+ */
+static void
+fs_setattr(void *softc, struct l9p_request *req)
+{
+	uint64_t mask;
+	struct fs_softc *sc = softc;
+	struct timeval tv[2];
+	struct openfile *file;
+	struct stat st;
+	int error = 0;
+	uid_t uid, gid;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+
+	/*
+	 * As with WSTAT we have atomicity issues.
+	 */
+	mask = req->lr_req.tsetattr.valid;
+
+	if (lstat(file->name, &st)) {
+		error = errno;
+		goto out;
+	}
+
+	if ((mask & L9PL_SETATTR_SIZE) && S_ISDIR(st.st_mode)) {
+		error = EISDIR;
+		goto out;
+	}
+
+	if (mask & L9PL_SETATTR_MODE) {
+		if (lchmod(file->name, req->lr_req.tsetattr.mode & 0777)) {
+			error = errno;
+			goto out;
+		}
+	}
+
+	if (mask & (L9PL_SETATTR_UID | L9PL_SETATTR_GID)) {
+		uid = mask & L9PL_SETATTR_UID ? req->lr_req.tsetattr.uid : -1;
+		gid = mask & L9PL_SETATTR_GID ? req->lr_req.tsetattr.gid : -1;
+		if (lchown(file->name, uid, gid)) {
+			error = errno;
+			goto out;
+		}
+	}
+
+	if (mask & L9PL_SETATTR_SIZE) {
+		/* Truncate follows symlinks, is this OK? */
+		if (truncate(file->name, req->lr_req.tsetattr.size)) {
+			error = errno;
+			goto out;
+		}
+	}
+
+	if (mask & (L9PL_SETATTR_ATIME | L9PL_SETATTR_CTIME)) {
+		tv[0].tv_sec = st.st_atimespec.tv_sec;
+		tv[0].tv_usec = st.st_atimespec.tv_nsec / 1000;
+		tv[1].tv_sec = st.st_mtimespec.tv_sec;
+		tv[1].tv_usec = st.st_mtimespec.tv_nsec / 1000;
+
+		if (mask & L9PL_SETATTR_ATIME) {
+			if (mask & L9PL_SETATTR_ATIME_SET) {
+				tv[0].tv_sec = req->lr_req.tsetattr.atime_sec;
+				tv[0].tv_usec =
+				    req->lr_req.tsetattr.atime_nsec / 1000;
+			} else {
+				if (gettimeofday(&tv[0], NULL)) {
+					error = errno;
+					goto out;
+				}
+			}
+		}
+		if (mask & L9PL_SETATTR_MTIME) {
+			if (mask & L9PL_SETATTR_MTIME_SET) {
+				tv[1].tv_sec = req->lr_req.tsetattr.mtime_sec;
+				tv[1].tv_usec =
+				    req->lr_req.tsetattr.mtime_nsec / 1000;
+			} else {
+				if (gettimeofday(&tv[1], NULL)) {
+					error = errno;
+					goto out;
+				}
+			}
+		}
+		if (lutimes(file->name, tv)) {
+			error = errno;
+			goto out;
+		}
+	}
+out:
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1400,6 +1587,8 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->mknod = fs_mknod;
 	backend->rename = fs_rename;
 	backend->readlink = fs_readlink;
+	backend->getattr = fs_getattr;
+	backend->setattr = fs_setattr;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

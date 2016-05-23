@@ -729,6 +729,15 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pustring(msg, &fcall->getlock.client_id);
 		break;
 
+	case L9P_TLINK:
+		l9p_pu32(msg, &fcall->tlink.dfid);
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pustring(msg, &fcall->tlink.name);
+		break;
+
+	case L9P_RLINK:
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);
@@ -834,6 +843,10 @@ l9p_freefcall(union l9p_fcall *fcall)
 	case L9P_TGETLOCK:
 	case L9P_RGETLOCK:
 		free(fcall->getlock.client_id);
+		return;
+
+	case L9P_TLINK:
+		free(fcall->tlink.name);
 		return;
 	}
 }

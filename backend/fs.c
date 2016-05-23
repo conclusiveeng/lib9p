@@ -89,6 +89,7 @@ static void fs_readdir(void *, struct l9p_request *);
 static void fs_fsync(void *, struct l9p_request *);
 static void fs_lock(void *, struct l9p_request *);
 static void fs_getlock(void *, struct l9p_request *);
+static void fs_link(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1652,6 +1653,47 @@ fs_getlock(void *softc __unused, struct l9p_request *req)
 }
 
 static void
+fs_link(void *softc, struct l9p_request *req)
+{
+	struct fs_softc *sc = softc;
+	struct openfile *file;
+	struct openfile *dirf;
+	struct stat st;
+	char *newname;
+	int error = 0;
+
+	file = req->lr_fid->lo_aux;
+	dirf = req->lr_fid2->lo_aux;
+	assert(file && dirf);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+
+	/* Require write access to target directory. */
+	if (lstat(dirf->name, &st)) {
+		error = errno;
+		goto out;
+	}
+	if (!check_access(&st, file->uid, L9P_OWRITE)) {
+		error = EPERM;
+		goto out;
+	}
+
+	if (asprintf(&newname, "%s/%s",
+	    dirf->name, req->lr_req.tlink.name) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+	if (link(file->name, newname) != 0)
+		error = errno;
+	free(newname);
+out:
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1704,6 +1746,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->fsync = fs_fsync;
 	backend->lock = fs_lock;
 	backend->getlock = fs_getlock;
+	backend->link = fs_link;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

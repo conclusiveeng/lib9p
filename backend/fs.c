@@ -1694,6 +1694,59 @@ out:
 }
 
 static void
+fs_mkdir(void *softc, struct l9p_request *req)
+{
+	struct fs_softc *sc = softc;
+	struct openfile *file;
+	struct stat st;
+	char *newname = NULL;
+	int error = 0;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+
+	/* Require write access to target directory. */
+	if (lstat(file->name, &st)) {
+		error = errno;
+		goto out;
+	}
+	if (!check_access(&st, file->uid, L9P_OWRITE)) {
+		error = EPERM;
+		goto out;
+	}
+
+	if (asprintf(&newname, "%s/%s",
+	    file->name, req->lr_req.tmkdir.name) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+
+	error = internal_mkdir(newname, req->lr_req.tmkdir.mode, &st);
+	if (error)
+		goto out;
+
+	if (lchown(newname, file->uid, req->lr_req.tmkdir.gid) != 0) {
+		error = errno;
+		goto out;
+	}
+
+	if (lstat(newname, &st) != 0) {
+		error = errno;
+		goto out;
+	}
+
+	generate_qid(&st, &req->lr_resp.rmkdir.qid);
+out:
+	free(newname);
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1747,6 +1800,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->lock = fs_lock;
 	backend->getlock = fs_getlock;
 	backend->link = fs_link;
+	backend->mkdir = fs_mkdir;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

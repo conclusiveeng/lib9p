@@ -703,6 +703,32 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	case L9P_RFSYNC:
 		break;
 
+	case L9P_TLOCK:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pu8(msg, &fcall->tlock.type);
+		l9p_pu32(msg, &fcall->tlock.flags);
+		l9p_pu64(msg, &fcall->tlock.start);
+		l9p_pu64(msg, &fcall->tlock.length);
+		l9p_pu32(msg, &fcall->tlock.proc_id);
+		l9p_pustring(msg, &fcall->tlock.client_id);
+		break;
+
+	case L9P_RLOCK:
+		l9p_pu8(msg, &fcall->rlock.status);
+		break;
+
+	case L9P_TGETLOCK:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		/* FALLTHROUGH */
+
+	case L9P_RGETLOCK:
+		l9p_pu8(msg, &fcall->getlock.type);
+		l9p_pu64(msg, &fcall->getlock.start);
+		l9p_pu64(msg, &fcall->getlock.length);
+		l9p_pu32(msg, &fcall->getlock.proc_id);
+		l9p_pustring(msg, &fcall->getlock.client_id);
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);
@@ -799,6 +825,15 @@ l9p_freefcall(union l9p_fcall *fcall)
 
 	case L9P_TXATTRCREATE:
 		free(fcall->txattrcreate.name);
+		return;
+
+	case L9P_TLOCK:
+		free(fcall->tlock.client_id);
+		return;
+
+	case L9P_TGETLOCK:
+	case L9P_RGETLOCK:
+		free(fcall->getlock.client_id);
 		return;
 	}
 }

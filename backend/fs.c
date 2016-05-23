@@ -87,6 +87,8 @@ static void fs_xattrwalk(void *, struct l9p_request *);
 static void fs_xattrcreate(void *, struct l9p_request *);
 static void fs_readdir(void *, struct l9p_request *);
 static void fs_fsync(void *, struct l9p_request *);
+static void fs_lock(void *, struct l9p_request *);
+static void fs_getlock(void *, struct l9p_request *);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1636,6 +1638,20 @@ fs_fsync(void *softc __unused, struct l9p_request *req)
 }
 
 static void
+fs_lock(void *softc __unused, struct l9p_request *req)
+{
+
+	l9p_respond(req, ENOTSUP);
+}
+
+static void
+fs_getlock(void *softc __unused, struct l9p_request *req)
+{
+
+	l9p_respond(req, ENOTSUP);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1686,6 +1702,8 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->xattrcreate = fs_xattrcreate;
 	backend->readdir = fs_readdir;
 	backend->fsync = fs_fsync;
+	backend->lock = fs_lock;
+	backend->getlock = fs_getlock;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

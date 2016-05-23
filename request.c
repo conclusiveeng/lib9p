@@ -69,6 +69,8 @@ static void l9p_dispatch_txattrwalk(struct l9p_request *req);
 static void l9p_dispatch_txattrcreate(struct l9p_request *req);
 static void l9p_dispatch_treaddir(struct l9p_request *req);
 static void l9p_dispatch_tfsync(struct l9p_request *req);
+static void l9p_dispatch_tlock(struct l9p_request *req);
+static void l9p_dispatch_tgetlock(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -133,6 +135,8 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TXATTRCREATE, l9p_dispatch_txattrcreate},
 	{L9P_TREADDIR, l9p_dispatch_treaddir},
 	{L9P_TFSYNC, l9p_dispatch_tfsync},
+	{L9P_TLOCK, l9p_dispatch_tlock},
+	{L9P_TGETLOCK, l9p_dispatch_tgetlock},
 };
 
 /*
@@ -689,4 +693,18 @@ l9p_dispatch_tfsync(struct l9p_request *req)
 {
 
 	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->fsync);
+}
+
+static void
+l9p_dispatch_tlock(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lock);
+}
+
+static void
+l9p_dispatch_tgetlock(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->getlock);
 }

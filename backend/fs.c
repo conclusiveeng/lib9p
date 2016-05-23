@@ -621,6 +621,27 @@ fs_open(void *softc __unused, struct l9p_request *req)
 	l9p_respond(req, 0);
 }
 
+/*
+ * Helper for directory read.  We want to run an lstat on each
+ * file name within the directory.  This is a lot faster if we
+ * have lstatat (or fstatat with AT_SYMLINK_NOFOLLOW), but not
+ * all systems do, so hide the ifdef-ed code in an inline function.
+ */
+static inline int
+fs_lstatat(struct openfile *file, char *name, struct stat *st)
+{
+#if defined(__FreeBSD__)
+	return (fstatat(dirfd(file->dir), name, st, AT_SYMLINK_NOFOLLOW));
+#else
+	char buf[MAXPATHLEN];
+
+	if (strlcpy(buf, file->name) >= sizeof(name) ||
+	    strlcat(buf, name) >= sizeof(name))
+		return (-1);
+	return (lstat(name, st));
+#endif
+}
+
 static void
 fs_read(void *softc __unused, struct l9p_request *req)
 {
@@ -658,7 +679,7 @@ fs_read(void *softc __unused, struct l9p_request *req)
 			d = readdir(file->dir);
 			if (d == NULL)
 				break;
-			if (lstat(d->d_name, &st))
+			if (fs_lstatat(file, d->d_name, &st))
 				continue;
 			dostat(&l9stat, d->d_name, &st, dotu);
 			if (l9p_pack_stat(&msg, req, &l9stat) != 0) {

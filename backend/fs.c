@@ -91,6 +91,7 @@ static void fs_lock(void *, struct l9p_request *);
 static void fs_getlock(void *, struct l9p_request *);
 static void fs_link(void *, struct l9p_request *);
 static void fs_renameat(void *softc, struct l9p_request *req);
+static void fs_unlinkat(void *softc, struct l9p_request *req);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1802,6 +1803,45 @@ out:
 }
 
 static void
+fs_unlinkat(void *softc, struct l9p_request *req)
+{
+	struct fs_softc *sc = softc;
+	struct openfile *file;
+	struct stat st;
+	char *name;
+	int error;
+
+	file = req->lr_fid->lo_aux;
+	assert(file);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+
+	/* Require write access to directory. */
+	if (lstat(file->name, &st)) {
+		error = errno;
+		goto out;
+	}
+	if (!check_access(&st, file->uid, L9P_OWRITE)) {
+		error = EPERM;
+		goto out;
+	}
+
+	if (asprintf(&name, "%s/%s",
+		    file->name, req->lr_req.tunlinkat.name) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+
+	error = unlink(name);
+	free(name);
+out:
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1857,6 +1897,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->link = fs_link;
 	backend->mkdir = fs_mkdir;
 	backend->renameat = fs_renameat;
+	backend->unlinkat = fs_unlinkat;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

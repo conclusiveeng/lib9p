@@ -759,6 +759,15 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	case L9P_RRENAMEAT:
 		break;
 
+	case L9P_TUNLINKAT:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pustring(msg, &fcall->tunlinkat.name);
+		l9p_pu32(msg, &fcall->tunlinkat.flags);	/* ??? not used? */
+		break;
+
+	case L9P_RUNLINKAT:
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);
@@ -877,6 +886,10 @@ l9p_freefcall(union l9p_fcall *fcall)
 	case L9P_TRENAMEAT:
 		free(fcall->trenameat.oldname);
 		free(fcall->trenameat.newname);
+		return;
+
+	case L9P_TUNLINKAT:
+		free(fcall->tunlinkat.name);
 		return;
 	}
 }

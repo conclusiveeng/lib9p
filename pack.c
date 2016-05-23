@@ -749,6 +749,16 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_puqid(msg, &fcall->rmkdir.qid);
 		break;
 
+	case L9P_TRENAMEAT:
+		l9p_pu32(msg, &fcall->hdr.fid);
+		l9p_pustring(msg, &fcall->trenameat.oldname);
+		l9p_pu32(msg, &fcall->trenameat.newdirfid);
+		l9p_pustring(msg, &fcall->trenameat.newname);
+		break;
+
+	case L9P_RRENAMEAT:
+		break;
+
 	default:
 		L9P_LOG(L9P_ERROR, "%s(): missing case for type %d",
 		    __func__, fcall->hdr.type);
@@ -862,6 +872,11 @@ l9p_freefcall(union l9p_fcall *fcall)
 
 	case L9P_TMKDIR:
 		free(fcall->tmkdir.name);
+		return;
+
+	case L9P_TRENAMEAT:
+		free(fcall->trenameat.oldname);
+		free(fcall->trenameat.newname);
 		return;
 	}
 }

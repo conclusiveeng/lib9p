@@ -90,6 +90,7 @@ static void fs_fsync(void *, struct l9p_request *);
 static void fs_lock(void *, struct l9p_request *);
 static void fs_getlock(void *, struct l9p_request *);
 static void fs_link(void *, struct l9p_request *);
+static void fs_renameat(void *softc, struct l9p_request *req);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
 struct fs_softc
@@ -1747,6 +1748,60 @@ out:
 }
 
 static void
+fs_renameat(void *softc, struct l9p_request *req)
+{
+	struct fs_softc *sc = softc;
+	struct openfile *olddir, *newdir;
+	struct stat st;
+	char *oldname = NULL, *newname = NULL;
+	int error;
+
+	olddir = req->lr_fid->lo_aux;
+	newdir = req->lr_fid2->lo_aux;
+	assert(olddir && newdir);
+
+	if (sc->fs_readonly) {
+		error = EROFS;
+		goto out;
+	}
+
+	/* Require write access to both source and target directory. */
+	if (lstat(olddir->name, &st)) {
+		error = errno;
+		goto out;
+	}
+	if (!check_access(&st, olddir->uid, L9P_OWRITE)) {
+		error = EPERM;
+		goto out;
+	}
+	if (olddir != newdir) {
+		if (lstat(newdir->name, &st)) {
+			error = errno;
+			goto out;
+		}
+		if (!check_access(&st, newdir->uid, L9P_OWRITE)) {
+			error = EPERM;
+			goto out;
+		}
+	}
+
+	if (asprintf(&oldname, "%s/%s",
+		    olddir->name, req->lr_req.trenameat.oldname) < 0 ||
+	    asprintf(&newname, "%s/%s",
+		    newdir->name, req->lr_req.trenameat.newname) < 0) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+
+	error = rename(oldname, newname);
+
+out:
+	free(newname);
+	free(oldname);
+	l9p_respond(req, error);
+}
+
+static void
 fs_freefid(void *softc __unused, struct l9p_openfile *fid)
 {
 	struct openfile *f = fid->lo_aux;
@@ -1801,6 +1856,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->getlock = fs_getlock;
 	backend->link = fs_link;
 	backend->mkdir = fs_mkdir;
+	backend->renameat = fs_renameat;
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));

@@ -73,6 +73,7 @@ static void l9p_dispatch_tlock(struct l9p_request *req);
 static void l9p_dispatch_tgetlock(struct l9p_request *req);
 static void l9p_dispatch_tlink(struct l9p_request *req);
 static void l9p_dispatch_tmkdir(struct l9p_request *req);
+static void l9p_dispatch_trenameat(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -141,6 +142,7 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TGETLOCK, l9p_dispatch_tgetlock},
 	{L9P_TLINK, l9p_dispatch_tlink},
 	{L9P_TMKDIR, l9p_dispatch_tmkdir},
+	{L9P_TRENAMEAT, l9p_dispatch_trenameat},
 };
 
 /*
@@ -726,4 +728,12 @@ l9p_dispatch_tmkdir(struct l9p_request *req)
 {
 
 	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->mkdir);
+}
+
+static void
+l9p_dispatch_trenameat(struct l9p_request *req)
+{
+
+	l9p_2fid_dispatch(req, req->lr_req.trenameat.newdirfid,
+	    req->lr_conn->lc_server->ls_backend->renameat);
 }

@@ -45,6 +45,10 @@ static void l9p_describe_name(const char *, char *, struct sbuf *);
 static void l9p_describe_perm(const char *, uint32_t, struct sbuf *);
 static void l9p_describe_qid(const char *, struct l9p_qid *, struct sbuf *);
 static void l9p_describe_stat(const char *, struct l9p_stat *, struct sbuf *);
+static void l9p_describe_statfs(const char *, struct l9p_statfs *,
+    struct sbuf *);
+static void l9p_describe_time(struct sbuf *, const char *, uint64_t, uint64_t);
+static void l9p_describe_readdir(struct sbuf *, struct l9p_f_io *);
 static void l9p_describe_size(const char *, uint64_t, struct sbuf *);
 static void l9p_describe_ugid(const char *, uint32_t, struct sbuf *);
 
@@ -239,7 +243,7 @@ l9p_describe_stat(const char *str, struct l9p_stat *st, struct sbuf *sb)
 	l9p_describe_name(" uid=", st->uid, sb);
 }
 
-void
+static void
 l9p_describe_statfs(const char *str, struct l9p_statfs *st, struct sbuf *sb)
 {
 

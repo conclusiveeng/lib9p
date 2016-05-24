@@ -630,7 +630,7 @@ fs_open(void *softc __unused, struct l9p_request *req)
 static inline int
 fs_lstatat(struct openfile *file, char *name, struct stat *st)
 {
-#if defined(__FreeBSD__)
+#if defined(__FreeBSD__) || defined(__APPLE__)
 	return (fstatat(dirfd(file->dir), name, st, AT_SYMLINK_NOFOLLOW));
 #else
 	char buf[MAXPATHLEN];

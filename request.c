@@ -248,6 +248,7 @@ l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
 	msg->lm_size = 0;
 	msg->lm_mode = mode;
 	msg->lm_cursor_iov = 0;
+	msg->lm_cursor_offset = 0;
 	msg->lm_niov = req->lr_data_niov;
 	memcpy(msg->lm_iov, req->lr_data_iov,
 	    sizeof (struct iovec) * req->lr_data_niov);

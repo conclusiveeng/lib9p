@@ -185,6 +185,8 @@ l9p_describe_mode(const char *str, uint32_t mode, struct sbuf *sb)
 
 /*
  * Show file name or other similar, potentially-very-long string.
+ * Actual strings get quotes, a NULL name (if it occurs) gets
+ * <null> (no quotes), so you can tell the difference.
  */
 static void
 l9p_describe_name(const char *str, char *name, struct sbuf *sb)
@@ -192,7 +194,7 @@ l9p_describe_name(const char *str, char *name, struct sbuf *sb)
 	size_t len;
 
 	if (name == NULL) {
-		sbuf_printf(sb, "%s<null>", name);
+		sbuf_printf(sb, "%s<null>", str);
 		return;
 	}
 
@@ -554,13 +556,13 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	case L9P_TGETATTR:
 		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
 		mask = fcall->tgetattr.request_mask;
-		sbuf_printf(sb, " request_mask=0x%08x", mask);
+		sbuf_printf(sb, " request_mask=0x%16" PRIx64, mask);
 		/* XXX decode request_mask later */
 		return;
 
 	case L9P_RGETATTR:
 		mask = fcall->rgetattr.valid;
-		sbuf_printf(sb, " valid=0x%08x", mask);
+		sbuf_printf(sb, " valid=0x%16" PRIx64, mask);
 		l9p_describe_qid(" qid=", &fcall->rgetattr.qid, sb);
 		if (mask & L9PL_GETATTR_MODE)
 			sbuf_printf(sb, " mode=0x%08x", fcall->rgetattr.mode);
@@ -605,7 +607,8 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	case L9P_TSETATTR:
 		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
 		mask = fcall->tsetattr.valid;
-		sbuf_printf(sb, " valid=0x%08x", mask);
+		/* NB: tsetattr valid mask is only 32 bits, hence %08x */
+		sbuf_printf(sb, " valid=0x%08" PRIx64, mask);
 		if (mask & L9PL_SETATTR_MODE)
 			sbuf_printf(sb, " mode=0x%08x", fcall->tsetattr.mode);
 		if (mask & L9PL_SETATTR_UID)

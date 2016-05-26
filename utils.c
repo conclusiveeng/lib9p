@@ -70,6 +70,7 @@ static const char *ftype_names[] = {
 	X(AUTH,		"auth"),
 	X(ATTACH,	"attach"),
 	X(ERROR,	"error"),
+	X(LERROR,	"lerror"),
 	X(FLUSH,	"flush"),
 	X(WALK,		"walk"),
 	X(OPEN,		"open"),

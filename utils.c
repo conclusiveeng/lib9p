@@ -336,14 +336,12 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	    ftype_names[type - L9P__FIRST] == NULL) {
 		sbuf_printf(sb, "<unknown request %d> tag=%d", type,
 		    fcall->hdr.tag);
-		return;
+	} else {
+		sbuf_printf(sb, "%s tag=%d", ftype_names[type - L9P__FIRST],
+		    fcall->hdr.tag);
 	}
 
-	sbuf_printf(sb, "%s tag=%d", ftype_names[type - L9P__FIRST],
-	    fcall->hdr.tag);
-
 	switch (type) {
-
 	case L9P_TVERSION:
 	case L9P_RVERSION:
 		sbuf_printf(sb, " version=\"%s\" msize=%d", fcall->version.version,

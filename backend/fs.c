@@ -1026,7 +1026,7 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 #define	L_O_NOFOLLOW	000400000U
 #define	L_O_TMPFILE	020000000U	/* ??? should we get this? */
 
-#define	LO_LC_FORBID	(0xfffffffc & ~(L_O_EXCL | L_O_TRUNC))
+#define	LO_LC_FORBID	(0xfffffffc & ~(L_O_CREAT | L_O_EXCL | L_O_TRUNC))
 
 /*
  * Common code for LOPEN and LCREATE requests.
@@ -1063,10 +1063,8 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 	if (sc->fs_readonly && (newname || oacc != L9P_OREAD))
 		return (EROFS);
 
-	if (lflags & LO_LC_FORBID) {
-		/* NB: currently includes L_O_CREAT */
+	if (lflags & LO_LC_FORBID)
 		return (ENOTSUP);
-	}
 
 	if (newname == NULL) {
 		/* open: require access, including write if O_TRUNC */
@@ -1093,12 +1091,16 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 	} else {
 		/*
 		 * XXX racy, see fs_create.
+		 * Note, file->name is testing the containing dir,
+		 * not the file itself (so L_O_CREAT is still OK).
 		 */
 		if (lstat(file->name, stp) != 0)
 			return (errno);
 		if (!check_access(stp, file->uid, L9P_OWRITE))
 			return (EPERM);
 		oflags = lflags & O_ACCMODE;
+		if (lflags & L_O_CREAT)
+			oflags |= O_CREAT;
 		if (lflags & L_O_TRUNC)
 			oflags |= O_TRUNC;
 		if (lflags & L_O_EXCL)

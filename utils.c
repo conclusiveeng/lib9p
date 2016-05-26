@@ -188,7 +188,14 @@ l9p_describe_mode(const char *str, uint32_t mode, struct sbuf *sb)
 static void
 l9p_describe_name(const char *str, char *name, struct sbuf *sb)
 {
-	size_t len = strlen(name);
+	size_t len;
+
+	if (name == NULL) {
+		sbuf_printf(sb, "%s<null>", name);
+		return;
+	}
+
+	len = strlen(name);
 
 	if (len > 32)
 		sbuf_printf(sb, "%s\"%.*s...\"", str, 32 - 3, name);

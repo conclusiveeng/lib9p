@@ -5,9 +5,11 @@ CFLAGS := \
 	-Wno-gnu-zero-variadic-macro-arguments \
 	-Wno-format-nonliteral \
 	-Wno-unused-macros \
+	-Wno-disabled-macro-expansion \
 	-Werror \
 	-g \
-	-O0
+	-O0 \
+	-DL9P_DEBUG=L9P_DEBUG
 # Note: to turn on debug, use -DL9P_DEBUG=L9P_DEBUG
 
 LIB_SRCS := \

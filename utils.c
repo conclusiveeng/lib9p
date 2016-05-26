@@ -200,7 +200,7 @@ l9p_describe_name(const char *str, char *name, struct sbuf *sb)
 	if (len > 32)
 		sbuf_printf(sb, "%s\"%.*s...\"", str, 32 - 3, name);
 	else
-		sbuf_printf(sb, "%s\"%.*s\"", str, len, name);
+		sbuf_printf(sb, "%s\"%.*s\"", str, (int)len, name);
 }
 
 /*

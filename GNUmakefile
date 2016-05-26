@@ -4,6 +4,7 @@ CFLAGS := \
 	-Wno-padded \
 	-Wno-gnu-zero-variadic-macro-arguments \
 	-Wno-format-nonliteral \
+	-Wno-unused-macros \
 	-Werror \
 	-g \
 	-O0

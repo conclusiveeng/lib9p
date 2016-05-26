@@ -644,9 +644,13 @@ fs_open(void *softc __unused, struct l9p_request *req)
 		return;
 	}
 
-	if (S_ISDIR(st.st_mode))
+	if (S_ISDIR(st.st_mode)) {
 		file->dir = opendir(file->name);
-	else {
+		if (file->dir == NULL) {
+			l9p_respond(req, EPERM);	/* ??? */
+			return;
+		}
+	} else {
 		file->fd = open(file->name, req->lr_req.topen.mode);
 		if (file->fd < 0) {
 			l9p_respond(req, EPERM);
@@ -1042,6 +1046,7 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 {
 	struct openfile *file = req->lr_fid->lo_aux;
 	int oflags, oacc;
+	int resultfd;
 
 	assert(file != NULL);
 
@@ -1076,10 +1081,12 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 			return (EPERM);
 		/* ignore O_EXCL, we are not creating */
 
-		/* ?? not sure if this S_ISDIR test is needed */
-		if (S_ISDIR(stp->st_mode))
+		if (S_ISDIR(stp->st_mode)) {
 			file->dir = opendir(file->name);
-		else {
+			if (file->dir == NULL)
+				return (errno);
+			resultfd = dirfd(file->dir);
+		} else {
 			oflags = lflags & O_ACCMODE;
 			if (lflags & L_O_TRUNC)
 				oflags |= O_TRUNC;
@@ -1087,6 +1094,7 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 			file->fd = open(file->name, oflags);
 			if (file->fd < 0)
 				return (errno);
+			resultfd = file->fd;
 		}
 	} else {
 		/*
@@ -1110,9 +1118,10 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 			return (errno);
 		if (fchown(file->fd, file->uid, gid) != 0)
 			return (errno);
+		resultfd = file->fd;
 	}
 
-	if (fstat(file->fd, stp) != 0)
+	if (fstat(resultfd, stp) != 0)
 		return (errno);
 
 	return (0);

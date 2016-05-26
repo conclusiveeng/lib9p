@@ -188,7 +188,7 @@ l9p_describe_mode(const char *str, uint32_t mode, struct sbuf *sb)
 static void
 l9p_describe_name(const char *str, char *name, struct sbuf *sb)
 {
-	int len = strlen(name);
+	size_t len = strlen(name);
 
 	if (len > 32)
 		sbuf_printf(sb, "%s\"%.*s...\"", str, 32 - 3, name);
@@ -322,7 +322,7 @@ void
 l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
     struct sbuf *sb)
 {
-	uint32_t mask;
+	uint64_t mask;
 	uint8_t type;
 	int i;
 

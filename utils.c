@@ -328,7 +328,7 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 
 	assert(fcall != NULL);
 	assert(sb != NULL);
-	assert(version <= L9P_2000L && version >= L9P_2000);
+	assert(version <= L9P_2000L && version >= L9P_INVALID_VERSION);
 
 	type = fcall->hdr.type;
 

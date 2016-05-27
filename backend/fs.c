@@ -1621,7 +1621,7 @@ fs_getattr(void *softc __unused, struct l9p_request *req)
 
 	generate_qid(&st, &req->lr_resp.rgetattr.qid);
 out:
-	req->lr_req.rgetattr.valid = valid;
+	req->lr_resp.rgetattr.valid = valid;
 	l9p_respond(req, error);
 }
 

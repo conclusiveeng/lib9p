@@ -277,7 +277,7 @@ to_linux(int errnum)
 	 */
 	if (errnum < 0)
 		return (-errnum);
-	if ((size_t)errnum < N(table))
+	if ((size_t)errnum < N(table) && table[errnum] != 0)
 		return (table[errnum]);
 	if (errnum <= ERANGE)
 		return (errnum);

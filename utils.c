@@ -556,13 +556,13 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	case L9P_TGETATTR:
 		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
 		mask = fcall->tgetattr.request_mask;
-		sbuf_printf(sb, " request_mask=0x%16" PRIx64, mask);
+		sbuf_printf(sb, " request_mask=0x%016" PRIx64, mask);
 		/* XXX decode request_mask later */
 		return;
 
 	case L9P_RGETATTR:
 		mask = fcall->rgetattr.valid;
-		sbuf_printf(sb, " valid=0x%16" PRIx64, mask);
+		sbuf_printf(sb, " valid=0x%016" PRIx64, mask);
 		l9p_describe_qid(" qid=", &fcall->rgetattr.qid, sb);
 		if (mask & L9PL_GETATTR_MODE)
 			sbuf_printf(sb, " mode=0x%08x", fcall->rgetattr.mode);

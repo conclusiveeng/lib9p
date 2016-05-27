@@ -1655,6 +1655,8 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 		if (l9p_pudirent(&msg, &de) < 0)
 			break;
 	}
+
+	req->lr_resp.io.count = (uint32_t)msg.lm_size;
 out:
 	l9p_respond(req, error);
 }

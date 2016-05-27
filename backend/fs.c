@@ -75,8 +75,6 @@
   #endif
 #endif
 
-#define	LINUX_ENOTSUP	95
-
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
@@ -1588,13 +1586,13 @@ out:
 static void
 fs_xattrwalk(void *softc __unused, struct l9p_request *req)
 {
-	l9p_respond(req, LINUX_ENOTSUP);
+	l9p_respond(req, ENOTSUP);
 }
 
 static void
 fs_xattrcreate(void *softc __unused, struct l9p_request *req)
 {
-	l9p_respond(req, LINUX_ENOTSUP);
+	l9p_respond(req, ENOTSUP);
 }
 
 static void

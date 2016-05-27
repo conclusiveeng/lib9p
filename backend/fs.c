@@ -832,33 +832,164 @@ fs_stat(void *softc __unused, struct l9p_request *req)
 }
 
 static void
-fs_walk(void *softc __unused, struct l9p_request *req)
+fs_walk(void *softc, struct l9p_request *req)
 {
-	uint16_t i;
-	struct stat buf;
+	struct fs_softc *sc = softc;
+	struct stat st;
 	struct openfile *file = req->lr_fid->lo_aux;
 	struct openfile *newfile;
-	char name[MAXPATHLEN];
+	size_t clen, namelen, need;
+	char *comp, *succ, *next, *swtmp;
+	bool dotdot;
+	int i, nwname;
+	int error = 0;
+	char namebufs[2][MAXPATHLEN];
 
-	strcpy(name, file->name);
-
-	for (i = 0; i < req->lr_req.twalk.nwname; i++) {
-		strcat(name, "/");
-		strcat(name, req->lr_req.twalk.wname[i]);
-		if (lstat(name, &buf) < 0){
-			l9p_respond(req, ENOENT);
-			return;
+	/*
+	 * https://swtch.com/plan9port/man/man9/walk.html:
+	 *
+	 *    It is legal for nwname to be zero, in which case newfid
+	 *    will represent the same file as fid and the walk will
+	 *    usually succeed; this is equivalent to walking to dot.
+	 * [Aside: it's not clear if we should test S_ISDIR here.]
+	 *    ...
+	 *    The name ".." ... represents the parent directory.
+	 *    The name "." ... is not used in the protocol.
+	 *    ... A walk of the name ".." in the root directory
+	 *    of the server is equivalent to a walk with no name
+	 *    elements.
+	 *
+	 * Note that req.twalk.nwname never exceeds L9P_MAX_WELEM,
+	 * so it is safe to convert to plain int.
+	 *
+	 * We are to return an error only if the first walk fails,
+	 * else stop at the end of the names or on the first error.
+	 * The final fid is based on the last name successfully
+	 * walked.
+	 *
+	 * Set up "successful name" buffer pointer with base fid name,
+	 * initially.  We'll swap each new success into it as we go.
+	 */
+	succ = namebufs[0];
+	next = namebufs[1];
+	namelen = strlcpy(succ, file->name, MAXPATHLEN);
+	if (namelen >= MAXPATHLEN) {
+		error = ENAMETOOLONG;
+		goto out;
+	}
+	if (lstat(succ, &st) < 0){
+		error = errno;
+		goto out;
+	}
+	nwname = (int)req->lr_req.twalk.nwname;
+	/*
+	 * Must have execute permission to search a directory.
+	 * Then, look up each component in the directory.
+	 * Check for ".." along the way, handlng specially
+	 * as needed.  Forbid "/" in name components.
+	 *
+	 * Note that we *do* get Twalk requests with
+	 * nwname==0 on files.
+	 */
+	if (nwname > 0) {
+		if (!S_ISDIR(st.st_mode)) {
+			error = ENOTDIR;
+			goto out;
 		}
-
-		generate_qid(&buf, &req->lr_resp.rwalk.wqid[i]);
+		if (!check_access(&st, file->uid, L9P_OEXEC)) {
+			L9P_LOG(L9P_DEBUG,
+			    "Twalk: denying dir-walk on \"%s\" for uid %u",
+			    succ, (unsigned)file->uid);
+			error = EPERM;
+			goto out;
+		}
+	}
+	for (i = 0; i < nwname; i++) {
+		comp = req->lr_req.twalk.wname[i];
+		if (strchr(comp, '/') != NULL) {
+			error = EINVAL;
+			break;
+		}
+		clen = strlen(comp);
+		dotdot = false;
+		if (comp[0] == '.') {
+			if (clen == 1) {
+				error = EINVAL;
+				break;
+			}
+			if (comp[1] == '.' && clen == 2) {
+				dotdot = true;
+				/*
+				 * It's not clear how ".." at
+				 * root should be handled if i > 0.
+				 * Obeying the man page exactly, we
+				 * reset i to 0 and stop, declaring
+				 * terminal success.
+				 */
+				if (strcmp(file->name, sc->fs_rootpath) == 0) {
+					succ = file->name;
+					i = 0;
+					break;
+				}
+			}
+		}
+		/*
+		 * Build next pathname (into "next").  If dotdot,
+		 * just strip one name component off file->name.
+		 * Since we know file->name fits, the stripped down
+		 * version also fits.  Otherwise, the name is the
+		 * base name plus '/' plus the component name
+		 * plus terminating '\0'; this may or may not
+		 * fit.
+		 */
+		if (dotdot) {
+			(void) r_dirname(file->name, next, MAXPATHLEN);
+		} else {
+			need = namelen + 1 + clen + 1;
+			if (need > MAXPATHLEN) {
+				error = ENAMETOOLONG;
+				break;
+			}
+			memcpy(next, file->name, namelen);
+			next[namelen] = '/';
+			memcpy(&next[namelen + 1], comp, clen + 1);
+		}
+		if (lstat(next, &st) < 0){
+			error = ENOENT;
+			break;
+		}
+		/*
+		 * Success: generate qid and swap this
+		 * successful name into place.
+		 */
+		generate_qid(&st, &req->lr_resp.rwalk.wqid[i]);
+		swtmp = succ;
+		succ = next;
+		next = swtmp;
 	}
 
-	newfile = open_fid(name);
+	/*
+	 * Fail only if we failed on the first name.
+	 * Otherwise we succeeded on something, and "succ"
+	 * points to the last successful name in namebufs[].
+	 */
+	if (error) {
+		if (i == 0)
+			goto out;
+		error = 0;
+	}
+
+	newfile = open_fid(succ);
+	if (newfile == NULL) {
+		error = ENOMEM;
+		goto out;
+	}
 	newfile->uid = file->uid;
 	newfile->gid = file->gid;
 	req->lr_newfid->lo_aux = newfile;
 	req->lr_resp.rwalk.nwqid = i;
-	l9p_respond(req, 0);
+out:
+	l9p_respond(req, error);
 }
 
 static void

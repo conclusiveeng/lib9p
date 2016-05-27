@@ -63,6 +63,18 @@
   #define	HAVE_BIRTHTIME
 #endif
 
+#if defined(__FreeBSD__)
+  /* should probably check version but fstatat has been in for ages */
+  #define HAVE_FSTATAT
+#endif
+
+#if defined(__APPLE__)
+  #include "Availability.h"
+  #if __MAC_OS_X_VERSION_MIN_REQUIRED > 1090
+    #define HAVE_FSTATAT
+  #endif
+#endif
+
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
@@ -673,13 +685,13 @@ fs_open(void *softc __unused, struct l9p_request *req)
 static inline int
 fs_lstatat(struct openfile *file, char *name, struct stat *st)
 {
-#if defined(__FreeBSD__) || defined(__APPLE__)
+#ifdef HAVE_FSTATAT
 	return (fstatat(dirfd(file->dir), name, st, AT_SYMLINK_NOFOLLOW));
 #else
 	char buf[MAXPATHLEN];
 
-	if (strlcpy(buf, file->name) >= sizeof(name) ||
-	    strlcat(buf, name) >= sizeof(name))
+	if (strlcpy(buf, file->name, sizeof(buf)) >= sizeof(buf) ||
+	    strlcat(buf, name, sizeof(buf)) >= sizeof(buf))
 		return (-1);
 	return (lstat(name, st));
 #endif

@@ -1038,11 +1038,15 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 #define	L_O_EXCL	000000200U
 #define	L_O_TRUNC	000001000U
 #define	L_O_APPEND	000002000U	/* ??? should we get this? */
+#define	L_O_NONBLOCK	000004000U
+#define	L_O_LARGEFILE	000100000U
 #define	L_O_DIRECTORY	000200000U
 #define	L_O_NOFOLLOW	000400000U
 #define	L_O_TMPFILE	020000000U	/* ??? should we get this? */
 
-#define	LO_LC_FORBID	(0xfffffffc & ~(L_O_CREAT | L_O_EXCL | L_O_TRUNC))
+#define	LO_LC_FORBID	(0xfffffffc & ~(L_O_CREAT | L_O_EXCL | L_O_TRUNC | \
+					L_O_DIRECTORY | L_O_LARGEFILE | \
+					L_O_NONBLOCK))
 
 /*
  * Common code for LOPEN and LCREATE requests.
@@ -1091,9 +1095,14 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 			oacc = L9P_ORDWR;
 		if (!check_access(stp, file->uid, oacc))
 			return (EPERM);
-		/* ignore O_EXCL, we are not creating */
+		/*
+		 * Ignore O_EXCL, we are not creating.
+		 * What if anything should we do with O_NONBLOCK?
+		 * (Currently we ignore it.)
+		 */
 
 		if (S_ISDIR(stp->st_mode)) {
+			/* should we refuse if not L_O_DIRECTORY? */
 			file->dir = opendir(file->name);
 			if (file->dir == NULL)
 				return (errno);
@@ -1102,6 +1111,8 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 			oflags = lflags & O_ACCMODE;
 			if (lflags & L_O_TRUNC)
 				oflags |= O_TRUNC;
+			if (lflags & L_O_DIRECTORY)
+				oflags |= O_DIRECTORY;
 			/* convert L_O_APPEND to O_APPEND? */
 			file->fd = open(file->name, oflags);
 			if (file->fd < 0)

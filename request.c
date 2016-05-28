@@ -41,7 +41,7 @@
 #include "fcall.h"
 #include "hashtable.h"
 #include "log.h"
-#include "linux-errno.h"
+#include "linux_errno.h"
 
 #define N(x)    (sizeof(x) / sizeof(x[0]))
 
@@ -273,7 +273,7 @@ to_linux(int errnum)
 	 * values a la Linux kernel internals.
 	 *
 	 * Values up to ERANGE are shared across systems (see
-	 * linux-errno.h), except for EAGAIN.
+	 * linux_errno.h), except for EAGAIN.
 	 */
 	if (errnum < 0)
 		return (-errnum);

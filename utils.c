@@ -39,7 +39,7 @@
 #endif
 #include "lib9p.h"
 #include "fcall.h"
-#include "linux-errno.h"
+#include "linux_errno.h"
 
 #define N(ary)          (sizeof(ary) / sizeof(*ary))
 

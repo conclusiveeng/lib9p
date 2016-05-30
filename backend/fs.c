@@ -421,10 +421,10 @@ internal_mkfifo(char *newname, mode_t mode)
 	return (0);
 }
 
+
 static inline int
-internal_mksocket(struct openfile *file __unused,
-		  struct l9p_request *req __unused,
-		  char *newname)
+internal_mksocket(struct openfile *file __unused, char *newname,
+    char *reqname __unused)
 {
 	struct sockaddr_un sun;
 	char *path;
@@ -442,7 +442,7 @@ internal_mksocket(struct openfile *file __unused,
 	if (strlen(path) >= sizeof(sun.sun_path)) {
 		fd = open(file->name, O_RDONLY);
 		if (fd >= 0)
-			path = req->lr_req.tcreate.name;
+			path = reqname;
 	}
 #endif
 
@@ -591,7 +591,8 @@ fs_create(void *softc, struct l9p_request *req)
 	else if (req->lr_req.tcreate.perm & L9P_DMNAMEDPIPE)
 		error = internal_mkfifo(newname, mode);
 	else if (req->lr_req.tcreate.perm & L9P_DMSOCKET)
-		error = internal_mksocket(file, req, newname);
+		error = internal_mksocket(file, newname,
+		    req->lr_req.tcreate.name);
 	else if (req->lr_req.tcreate.perm & L9P_DMDEVICE)
 		error = internal_mknod(req, newname, mode);
 	else {
@@ -1429,14 +1430,21 @@ fs_mknod(void *softc, struct l9p_request *req)
 	switch (mode & S_IFMT) {
 	case S_IFBLK:
 	case S_IFCHR:
+		mode = (mode & S_IFMT) | (mode & 0777);	/* ??? */
+		if (mknod(newname, (mode_t)mode, makedev(major, minor)) != 0) {
+			error = errno;
+			goto out;
+		}
+		break;
+	case S_IFSOCK:
+		error = internal_mksocket(file, newname,
+		    req->lr_req.tmknod.name);
+		if (error != 0)
+			goto out;
+
 		break;
 	default:
 		error = EINVAL;
-		goto out;
-	}
-	mode = (mode & S_IFMT) | (mode & 0777);	/* ??? */
-	if (mknod(newname, (mode_t)mode, makedev(major, minor)) != 0) {
-		error = errno;
 		goto out;
 	}
 	if (lchown(newname, file->uid, req->lr_req.tsymlink.gid) != 0) {

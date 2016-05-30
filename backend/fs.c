@@ -1139,25 +1139,39 @@ static void
 fs_statfs(void *softc __unused, struct l9p_request *req)
 {
 	struct openfile *file;
+	struct stat st;
 	struct statfs f;
 	long name_max;
+	int error = 0;
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	if (fstatfs(file->fd, &f)) {
-		l9p_respond(req, errno);
-		return;
+	if (lstat(file->name, &st) != 0) {
+		error = errno;
+		goto out;
 	}
-	name_max = fpathconf(file->fd, _PC_NAME_MAX);
+
+	if (!check_access(&st, file->uid, L9P_OREAD)) {
+		error = EPERM;
+		goto out;
+	}
+
+	if (statfs(file->name, &f) != 0) {
+		error = errno;
+		goto out;
+	}
+
+	name_max = pathconf(file->name, _PC_NAME_MAX);
 	if (name_max == -1) {
-		l9p_respond(req, errno);
-		return;
+		error = errno;
+		goto out;
 	}
 
 	dostatfs(&req->lr_resp.rstatfs.statfs, &f, name_max);
 
-	l9p_respond(req, 0);
+out:
+	l9p_respond(req, error);
 }
 
 /*

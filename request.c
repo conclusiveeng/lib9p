@@ -400,7 +400,7 @@ static inline void l9p_fid_dispatch(struct l9p_request *req,
 
 	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (req->lr_fid == NULL) {
-		l9p_respond(req, EBADF);
+		l9p_respond(req, EIO);
 		return;
 	}
 

@@ -1183,7 +1183,7 @@ out:
 #define	L_O_CREAT	000000100U
 #define	L_O_EXCL	000000200U
 #define	L_O_TRUNC	000001000U
-#define	L_O_APPEND	000002000U	/* ??? should we get this? */
+#define	L_O_APPEND	000002000U
 #define	L_O_NONBLOCK	000004000U
 #define	L_O_LARGEFILE	000100000U
 #define	L_O_DIRECTORY	000200000U
@@ -1191,6 +1191,7 @@ out:
 #define	L_O_TMPFILE	020000000U	/* ??? should we get this? */
 
 #define	LO_LC_FORBID	(0xfffffffc & ~(L_O_CREAT | L_O_EXCL | L_O_TRUNC | \
+					L_O_APPEND | L_O_NOFOLLOW | \
 					L_O_DIRECTORY | L_O_LARGEFILE | \
 					L_O_NONBLOCK))
 
@@ -1233,6 +1234,24 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 	if (lflags & LO_LC_FORBID)
 		return (ENOTSUP);
 
+	/*
+	 * What if anything should we do with O_NONBLOCK?
+	 * (Currently we ignore it.)
+	 */
+	oflags = lflags & O_ACCMODE;
+	if (lflags & L_O_CREAT)
+		oflags |= O_CREAT;
+	if (lflags & L_O_EXCL)
+		oflags |= O_EXCL;
+	if (lflags & L_O_TRUNC)
+		oflags |= O_TRUNC;
+	if (lflags & L_O_DIRECTORY)
+		oflags |= O_DIRECTORY;
+	if (lflags & L_O_APPEND)
+		oflags |= O_APPEND;
+	if (lflags & L_O_NOFOLLOW)
+		oflags |= O_NOFOLLOW;
+
 	if (newname == NULL) {
 		/* open: require access, including write if O_TRUNC */
 		if (lstat(file->name, stp) != 0)
@@ -1241,25 +1260,15 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 			oacc = L9P_ORDWR;
 		if (!check_access(stp, file->uid, oacc))
 			return (EPERM);
-		/*
-		 * Ignore O_EXCL, we are not creating.
-		 * What if anything should we do with O_NONBLOCK?
-		 * (Currently we ignore it.)
-		 */
-
+		/* Cancel O_CREAT|O_EXCL since we are not creating. */
+		oflags &= ~(O_CREAT | O_EXCL);
 		if (S_ISDIR(stp->st_mode)) {
-			/* should we refuse if not L_O_DIRECTORY? */
+			/* Should we refuse if not O_DIRECTORY? */
 			file->dir = opendir(file->name);
 			if (file->dir == NULL)
 				return (errno);
 			resultfd = dirfd(file->dir);
 		} else {
-			oflags = lflags & O_ACCMODE;
-			if (lflags & L_O_TRUNC)
-				oflags |= O_TRUNC;
-			if (lflags & L_O_DIRECTORY)
-				oflags |= O_DIRECTORY;
-			/* convert L_O_APPEND to O_APPEND? */
 			file->fd = open(file->name, oflags);
 			if (file->fd < 0)
 				return (errno);
@@ -1269,19 +1278,12 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 		/*
 		 * XXX racy, see fs_create.
 		 * Note, file->name is testing the containing dir,
-		 * not the file itself (so L_O_CREAT is still OK).
+		 * not the file itself (so O_CREAT is still OK).
 		 */
 		if (lstat(file->name, stp) != 0)
 			return (errno);
 		if (!check_access(stp, file->uid, L9P_OWRITE))
 			return (EPERM);
-		oflags = lflags & O_ACCMODE;
-		if (lflags & L_O_CREAT)
-			oflags |= O_CREAT;
-		if (lflags & L_O_TRUNC)
-			oflags |= O_TRUNC;
-		if (lflags & L_O_EXCL)
-			oflags |= O_EXCL;
 		file->fd = open(newname, oflags, mode);
 		if (file->fd < 0)
 			return (errno);

@@ -264,8 +264,12 @@ to_linux(int errnum)
 		[EPROTO] = LINUX_EPROTO,
 		/* ENOTCAPABLE = unmappable? */
 		/* ECAPMODE = unmappable? */
+#ifdef ENOTRECOVERABLE
 		[ENOTRECOVERABLE] = LINUX_ENOTRECOVERABLE,
+#endif
+#ifdef EOWNERDEAD
 		[EOWNERDEAD] = LINUX_EOWNERDEAD,
+#endif
 	};
 
 	/*

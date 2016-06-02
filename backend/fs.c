@@ -110,23 +110,20 @@ static void fs_renameat(void *softc, struct l9p_request *req);
 static void fs_unlinkat(void *softc, struct l9p_request *req);
 static void fs_freefid(void *softc, struct l9p_openfile *f);
 
-struct fs_softc
-{
+struct fs_softc {
 	const char *fs_rootpath;
 	bool fs_readonly;
 	TAILQ_HEAD(, fs_tree) fs_auxtrees;
 };
 
-struct fs_tree
-{
+struct fs_tree {
 	const char *fst_name;
 	const char *fst_path;
 	bool fst_readonly;
 	TAILQ_ENTRY(fs_tree) fst_link;
 };
 
-struct openfile
-{
+struct openfile {
 	DIR *dir;
 	int fd;
 	char *name;
@@ -1443,7 +1440,6 @@ fs_mknod(void *softc, struct l9p_request *req)
 		    req->lr_req.tmknod.name);
 		if (error != 0)
 			goto out;
-
 		break;
 	default:
 		error = EINVAL;
@@ -1602,24 +1598,32 @@ fs_getattr(void *softc __unused, struct l9p_request *req)
 		valid |= L9PL_GETATTR_RDEV;
 	}
 	if (mask & L9PL_GETATTR_ATIME) {
-		req->lr_resp.rgetattr.atime_sec = (uint64_t)st.st_atimespec.tv_sec;
-		req->lr_resp.rgetattr.atime_nsec = (uint64_t)st.st_atimespec.tv_nsec;
+		req->lr_resp.rgetattr.atime_sec =
+		    (uint64_t)st.st_atimespec.tv_sec;
+		req->lr_resp.rgetattr.atime_nsec =
+		    (uint64_t)st.st_atimespec.tv_nsec;
 		valid |= L9PL_GETATTR_ATIME;
 	}
 	if (mask & L9PL_GETATTR_MTIME) {
-		req->lr_resp.rgetattr.mtime_sec = (uint64_t)st.st_mtimespec.tv_sec;
-		req->lr_resp.rgetattr.mtime_nsec = (uint64_t)st.st_mtimespec.tv_nsec;
+		req->lr_resp.rgetattr.mtime_sec =
+		    (uint64_t)st.st_mtimespec.tv_sec;
+		req->lr_resp.rgetattr.mtime_nsec =
+		    (uint64_t)st.st_mtimespec.tv_nsec;
 		valid |= L9PL_GETATTR_MTIME;
 	}
 	if (mask & L9PL_GETATTR_CTIME) {
-		req->lr_resp.rgetattr.ctime_sec = (uint64_t)st.st_ctimespec.tv_sec;
-		req->lr_resp.rgetattr.ctime_nsec = (uint64_t)st.st_ctimespec.tv_nsec;
+		req->lr_resp.rgetattr.ctime_sec =
+		    (uint64_t)st.st_ctimespec.tv_sec;
+		req->lr_resp.rgetattr.ctime_nsec =
+		    (uint64_t)st.st_ctimespec.tv_nsec;
 		valid |= L9PL_GETATTR_CTIME;
 	}
 	if (mask & L9PL_GETATTR_BTIME) {
 #if defined(HAVE_BIRTHTIME)
-		req->lr_resp.rgetattr.btime_sec = (uint64_t)st.st_birthtim.tv_sec;
-		req->lr_resp.rgetattr.btime_nsec = (uint64_t)st.st_birthtim.tv_nsec;
+		req->lr_resp.rgetattr.btime_sec =
+		    (uint64_t)st.st_birthtim.tv_sec;
+		req->lr_resp.rgetattr.btime_nsec =
+		    (uint64_t)st.st_birthtim.tv_nsec;
 #else
 		req->lr_resp.rgetattr.btime_sec = 0;
 		req->lr_resp.rgetattr.btime_nsec = 0;
@@ -1694,8 +1698,10 @@ fs_setattr(void *softc, struct l9p_request *req)
 	}
 
 	if (mask & (L9PL_SETATTR_UID | L9PL_SETATTR_GID)) {
-		uid = mask & L9PL_SETATTR_UID ? req->lr_req.tsetattr.uid : (uid_t)-1;
-		gid = mask & L9PL_SETATTR_GID ? req->lr_req.tsetattr.gid : (gid_t)-1;
+		uid = mask & L9PL_SETATTR_UID ? req->lr_req.tsetattr.uid :
+		    (uid_t)-1;
+		gid = mask & L9PL_SETATTR_GID ? req->lr_req.tsetattr.gid :
+		    (gid_t)-1;
 		if (lchown(file->name, uid, gid)) {
 			error = errno;
 			goto out;
@@ -1718,7 +1724,8 @@ fs_setattr(void *softc, struct l9p_request *req)
 
 		if (mask & L9PL_SETATTR_ATIME) {
 			if (mask & L9PL_SETATTR_ATIME_SET) {
-				tv[0].tv_sec = (long)req->lr_req.tsetattr.atime_sec;
+				tv[0].tv_sec =
+				    (long)req->lr_req.tsetattr.atime_sec;
 				tv[0].tv_usec =
 				    (int)req->lr_req.tsetattr.atime_nsec / 1000;
 			} else {
@@ -1730,7 +1737,8 @@ fs_setattr(void *softc, struct l9p_request *req)
 		}
 		if (mask & L9PL_SETATTR_MTIME) {
 			if (mask & L9PL_SETATTR_MTIME_SET) {
-				tv[1].tv_sec = (long)req->lr_req.tsetattr.mtime_sec;
+				tv[1].tv_sec =
+				    (long)req->lr_req.tsetattr.mtime_sec;
 				tv[1].tv_usec =
 				    (int)req->lr_req.tsetattr.mtime_nsec / 1000;
 			} else {

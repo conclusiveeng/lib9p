@@ -68,10 +68,10 @@ enum l9p_integer_type {
 };
 
 enum l9p_version {
-	L9P_2000 = 0,
-	L9P_2000U = 1,
-	L9P_2000L = 2,
-	L9P_INVALID_VERSION = 3
+	L9P_INVALID_VERSION = 0,
+	L9P_2000 = 1,
+	L9P_2000U = 2,
+	L9P_2000L = 3
 };
 
 struct l9p_message {
@@ -83,6 +83,16 @@ struct l9p_message {
 	size_t lm_size;
 };
 
+/*
+ * Data structure for a request/response pair (Tfoo/Rfoo).
+ *
+ * We have room for two incoming fids, in case we are
+ * using 9P2000.L protocol.  Note that nothing that uses two
+ * fids also has an output fid (newfid), so we could have a
+ * union of lr_fid2 and lr_newfid, but keeping them separate
+ * is probably a bit less error-prone.  (If we want to shave
+ * memory requirements there are more places to look.)
+ */
 struct l9p_request {
 	uint32_t lr_tag;
 	struct l9p_message lr_req_msg;
@@ -90,6 +100,7 @@ struct l9p_request {
 	union l9p_fcall lr_req;
 	union l9p_fcall lr_resp;
 	struct l9p_openfile *lr_fid;
+	struct l9p_openfile *lr_fid2;
 	struct l9p_openfile *lr_newfid;
 	struct l9p_connection *lr_conn;
 	pthread_t lr_thread;
@@ -103,6 +114,14 @@ struct l9p_openfile {
 	uint32_t lo_fid;
 	struct l9p_qid lo_qid;
 	struct l9p_connection *lo_conn;
+};
+
+/* N.B.: these dirents are variable length and for .L only */
+struct l9p_dirent {
+	struct l9p_qid qid;
+	uint64_t offset;
+	uint8_t type;
+	char *name;
 };
 
 struct l9p_connection {
@@ -129,6 +148,7 @@ struct l9p_server {
 
 struct l9p_backend {
 	void *softc;
+	void (*freefid)(void *, struct l9p_openfile *);
 	void (*attach)(void *, struct l9p_request *);
 	void (*clunk)(void *, struct l9p_request *);
 	void (*create)(void *, struct l9p_request *);
@@ -140,7 +160,25 @@ struct l9p_backend {
 	void (*walk)(void *, struct l9p_request *);
 	void (*write)(void *, struct l9p_request *);
 	void (*wstat)(void *, struct l9p_request *);
-	void (*freefid)(void *, struct l9p_openfile *);
+	void (*statfs)(void *, struct l9p_request *);
+	void (*lopen)(void *, struct l9p_request *);
+	void (*lcreate)(void *, struct l9p_request *);
+	void (*symlink)(void *, struct l9p_request *);
+	void (*mknod)(void *, struct l9p_request *);
+	void (*rename)(void *, struct l9p_request *);
+	void (*readlink)(void *, struct l9p_request *);
+	void (*getattr)(void *, struct l9p_request *);
+	void (*setattr)(void *, struct l9p_request *);
+	void (*xattrwalk)(void *, struct l9p_request *);
+	void (*xattrcreate)(void *, struct l9p_request *);
+	void (*readdir)(void *, struct l9p_request *);
+	void (*fsync)(void *, struct l9p_request *);
+	void (*lock)(void *, struct l9p_request *);
+	void (*getlock)(void *, struct l9p_request *);
+	void (*link)(void *, struct l9p_request *);
+	void (*mkdir)(void *, struct l9p_request *);
+	void (*renameat)(void *, struct l9p_request *);
+	void (*unlinkat)(void *, struct l9p_request *);
 };
 
 int l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
@@ -150,6 +188,7 @@ ssize_t l9p_pustat(struct l9p_message *msg, struct l9p_stat *s,
 uint16_t l9p_sizeof_stat(struct l9p_stat *stat, enum l9p_version version);
 int l9p_pack_stat(struct l9p_message *msg, struct l9p_request *req,
     struct l9p_stat *s);
+ssize_t l9p_pudirent(struct l9p_message *msg, struct l9p_dirent *de);
 
 int l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend);
 

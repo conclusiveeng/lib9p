@@ -41,6 +41,7 @@
 #include "fcall.h"
 #include "hashtable.h"
 #include "log.h"
+#include "linux_errno.h"
 
 #define N(x)    (sizeof(x) / sizeof(x[0]))
 
@@ -56,6 +57,25 @@ static void l9p_dispatch_tstat(struct l9p_request *req);
 static void l9p_dispatch_twalk(struct l9p_request *req);
 static void l9p_dispatch_twrite(struct l9p_request *req);
 static void l9p_dispatch_twstat(struct l9p_request *req);
+static void l9p_dispatch_tstatfs(struct l9p_request *req);
+static void l9p_dispatch_tlopen(struct l9p_request *req);
+static void l9p_dispatch_tlcreate(struct l9p_request *req);
+static void l9p_dispatch_tsymlink(struct l9p_request *req);
+static void l9p_dispatch_tmknod(struct l9p_request *req);
+static void l9p_dispatch_trename(struct l9p_request *req);
+static void l9p_dispatch_treadlink(struct l9p_request *req);
+static void l9p_dispatch_tgetattr(struct l9p_request *req);
+static void l9p_dispatch_tsetattr(struct l9p_request *req);
+static void l9p_dispatch_txattrwalk(struct l9p_request *req);
+static void l9p_dispatch_txattrcreate(struct l9p_request *req);
+static void l9p_dispatch_treaddir(struct l9p_request *req);
+static void l9p_dispatch_tfsync(struct l9p_request *req);
+static void l9p_dispatch_tlock(struct l9p_request *req);
+static void l9p_dispatch_tgetlock(struct l9p_request *req);
+static void l9p_dispatch_tlink(struct l9p_request *req);
+static void l9p_dispatch_tmkdir(struct l9p_request *req);
+static void l9p_dispatch_trenameat(struct l9p_request *req);
+static void l9p_dispatch_tunlinkat(struct l9p_request *req);
 
 struct l9p_handler {
 	enum l9p_ftype type;
@@ -106,7 +126,26 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TREMOVE, l9p_dispatch_tremove},
 	{L9P_TSTAT, l9p_dispatch_tstat},
 	{L9P_TWALK, l9p_dispatch_twalk},
-	{L9P_TWSTAT, l9p_dispatch_twstat}
+	{L9P_TWSTAT, l9p_dispatch_twstat},
+	{L9P_TSTATFS, l9p_dispatch_tstatfs},
+	{L9P_TLOPEN, l9p_dispatch_tlopen},
+	{L9P_TLCREATE, l9p_dispatch_tlcreate},
+	{L9P_TSYMLINK, l9p_dispatch_tsymlink},
+	{L9P_TMKNOD, l9p_dispatch_tmknod},
+	{L9P_TRENAME, l9p_dispatch_trename},
+	{L9P_TREADLINK, l9p_dispatch_treadlink},
+	{L9P_TGETATTR, l9p_dispatch_tgetattr},
+	{L9P_TSETATTR, l9p_dispatch_tsetattr},
+	{L9P_TXATTRWALK, l9p_dispatch_txattrwalk},
+	{L9P_TXATTRCREATE, l9p_dispatch_txattrcreate},
+	{L9P_TREADDIR, l9p_dispatch_treaddir},
+	{L9P_TFSYNC, l9p_dispatch_tfsync},
+	{L9P_TLOCK, l9p_dispatch_tlock},
+	{L9P_TGETLOCK, l9p_dispatch_tgetlock},
+	{L9P_TLINK, l9p_dispatch_tlink},
+	{L9P_TMKDIR, l9p_dispatch_tmkdir},
+	{L9P_TRENAMEAT, l9p_dispatch_trenameat},
+	{L9P_TUNLINKAT, l9p_dispatch_tunlinkat},
 };
 
 /*
@@ -158,6 +197,97 @@ l9p_dispatch_request(struct l9p_request *req)
 	l9p_respond(req, ENOSYS);
 }
 
+/*
+ * Translate BSD errno to Linux errno.
+ */
+static inline int
+to_linux(int errnum)
+{
+	static int const table[] = {
+		[EDEADLK] = LINUX_EDEADLK,
+		[EAGAIN] = LINUX_EAGAIN,
+		[EINPROGRESS] = LINUX_EINPROGRESS,
+		[EALREADY] = LINUX_EALREADY,
+		[ENOTSOCK] = LINUX_ENOTSOCK,
+		[EDESTADDRREQ] = LINUX_EDESTADDRREQ,
+		[EMSGSIZE] = LINUX_EMSGSIZE,
+		[EPROTOTYPE] = LINUX_EPROTOTYPE,
+		[ENOPROTOOPT] = LINUX_ENOPROTOOPT,
+		[EPROTONOSUPPORT] = LINUX_EPROTONOSUPPORT,
+		[ESOCKTNOSUPPORT] = LINUX_ESOCKTNOSUPPORT,
+		[EOPNOTSUPP] = LINUX_EOPNOTSUPP,
+		[EPFNOSUPPORT] = LINUX_EPFNOSUPPORT,
+		[EAFNOSUPPORT] = LINUX_EAFNOSUPPORT,
+		[EADDRINUSE] = LINUX_EADDRINUSE,
+		[EADDRNOTAVAIL] = LINUX_EADDRNOTAVAIL,
+		[ENETDOWN] = LINUX_ENETDOWN,
+		[ENETUNREACH] = LINUX_ENETUNREACH,
+		[ENETRESET] = LINUX_ENETRESET,
+		[ECONNABORTED] = LINUX_ECONNABORTED,
+		[ECONNRESET] = LINUX_ECONNRESET,
+		[ENOBUFS] = LINUX_ENOBUFS,
+		[EISCONN] = LINUX_EISCONN,
+		[ENOTCONN] = LINUX_ENOTCONN,
+		[ESHUTDOWN] = LINUX_ESHUTDOWN,
+		[ETOOMANYREFS] = LINUX_ETOOMANYREFS,
+		[ETIMEDOUT] = LINUX_ETIMEDOUT,
+		[ECONNREFUSED] = LINUX_ECONNREFUSED,
+		[ELOOP] = LINUX_ELOOP,
+		[ENAMETOOLONG] = LINUX_ENAMETOOLONG,
+		[EHOSTDOWN] = LINUX_EHOSTDOWN,
+		[EHOSTUNREACH] = LINUX_EHOSTUNREACH,
+		[ENOTEMPTY] = LINUX_ENOTEMPTY,
+		[EPROCLIM] = LINUX_EAGAIN,
+		[EUSERS] = LINUX_EUSERS,
+		[EDQUOT] = LINUX_EDQUOT,
+		[ESTALE] = LINUX_ESTALE,
+		[EREMOTE] = LINUX_EREMOTE,
+		/* EBADRPC = unmappable? */
+		/* ERPCMISMATCH = unmappable? */
+		/* EPROGUNAVAIL = unmappable? */
+		/* EPROGMISMATCH = unmappable? */
+		/* EPROCUNAVAIL = unmappable? */
+		[ENOLCK] = LINUX_ENOLCK,
+		[ENOSYS] = LINUX_ENOSYS,
+		/* EFTYPE = unmappable? */
+		/* EAUTH = unmappable? */
+		/* ENEEDAUTH = unmappable? */
+		[EIDRM] = LINUX_EIDRM,
+		[ENOMSG] = LINUX_ENOMSG,
+		[EOVERFLOW] = LINUX_EOVERFLOW,
+		[ECANCELED] = LINUX_ECANCELED,
+		[EILSEQ] = LINUX_EILSEQ,
+		/* EDOOFUS = unmappable? */
+		[EBADMSG] = LINUX_EBADMSG,
+		[EMULTIHOP] = LINUX_EMULTIHOP,
+		[ENOLINK] = LINUX_ENOLINK,
+		[EPROTO] = LINUX_EPROTO,
+		/* ENOTCAPABLE = unmappable? */
+		/* ECAPMODE = unmappable? */
+#ifdef ENOTRECOVERABLE
+		[ENOTRECOVERABLE] = LINUX_ENOTRECOVERABLE,
+#endif
+#ifdef EOWNERDEAD
+		[EOWNERDEAD] = LINUX_EOWNERDEAD,
+#endif
+	};
+
+	/*
+	 * In case we want to return a raw Linux errno, allow negative
+	 * values a la Linux kernel internals.
+	 *
+	 * Values up to ERANGE are shared across systems (see
+	 * linux_errno.h), except for EAGAIN.
+	 */
+	if (errnum < 0)
+		return (-errnum);
+	if ((size_t)errnum < N(table) && table[errnum] != 0)
+		return (table[errnum]);
+	if (errnum <= ERANGE)
+		return (errnum);
+	return (LINUX_ENOTRECOVERABLE);	/* ??? */
+}
+
 void
 l9p_respond(struct l9p_request *req, int errnum)
 {
@@ -182,10 +312,10 @@ l9p_respond(struct l9p_request *req, int errnum)
 		break;
 
 	case L9P_TWALK:
+	case L9P_TXATTRWALK:
 		if (errnum != 0 && req->lr_newfid != NULL &&
 		    req->lr_newfid != req->lr_fid)
 			l9p_connection_remove_fid(conn, req->lr_newfid);
-
 		break;
 	}
 
@@ -194,14 +324,19 @@ l9p_respond(struct l9p_request *req, int errnum)
 	if (errnum == 0)
 		req->lr_resp.hdr.type = req->lr_req.hdr.type + 1;
 	else {
-		req->lr_resp.hdr.type = L9P_RERROR;
-		req->lr_resp.error.ename = strerror(errnum);
-		req->lr_resp.error.errnum = (uint32_t)errnum;
+		if (conn->lc_version == L9P_2000L) {
+			req->lr_resp.hdr.type = L9P_RLERROR;
+			req->lr_resp.error.errnum = (uint32_t)to_linux(errnum);
+		} else {
+			req->lr_resp.hdr.type = L9P_RERROR;
+			req->lr_resp.error.ename = strerror(errnum);
+			req->lr_resp.error.errnum = (uint32_t)errnum;
+		}
 	}
 
 #if defined(L9P_DEBUG)
 	sb = sbuf_new_auto();
-	l9p_describe_fcall(&req->lr_resp, L9P_2000, sb);
+	l9p_describe_fcall(&req->lr_resp, conn->lc_version, sb);
 	sbuf_done(sb);
 
 	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
@@ -215,8 +350,9 @@ l9p_respond(struct l9p_request *req, int errnum)
 
 	iosize = req->lr_resp_msg.lm_size;
 
-	/* Include I/O size in calculation for Rread response */
-	if (req->lr_resp.hdr.type == L9P_RREAD)
+	/* Include I/O size in calculation for Rread and Rreaddir responses */
+	if (req->lr_resp.hdr.type == L9P_RREAD ||
+	    req->lr_resp.hdr.type == L9P_RREADDIR)
 		iosize += req->lr_resp.io.count;
 
 	conn->lc_send_response(req, req->lr_resp_msg.lm_iov,
@@ -252,6 +388,90 @@ l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
 	msg->lm_niov = req->lr_data_niov;
 	memcpy(msg->lm_iov, req->lr_data_iov,
 	    sizeof (struct iovec) * req->lr_data_niov);
+}
+
+/*
+ * Generic handler for operations that require valid fid.
+ *
+ * Decodes header fid to file, then calls backend function
+ * (*be)(softc, req).  Returns EBADF or ENOSYS if the fid is
+ * invalid or the backend function is not there.
+ */
+static inline void l9p_fid_dispatch(struct l9p_request *req,
+    void (*be)(void *, struct l9p_request *))
+{
+	struct l9p_connection *conn = req->lr_conn;
+
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EIO);
+		return;
+	}
+
+	if (be == NULL) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	(*be)(conn->lc_server->ls_backend->softc, req);
+}
+
+/*
+ * Generic handler for operations that need two fid's.
+ * Note that the 2nd fid must be supplied by the caller; the
+ * corresponding openfile goes into req->lr_f2.
+ */
+static inline void l9p_2fid_dispatch(struct l9p_request *req, uint32_t fid2,
+    void (*be)(void *, struct l9p_request *))
+{
+	struct l9p_connection *conn = req->lr_conn;
+
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (req->lr_fid == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	req->lr_fid2 = ht_find(&conn->lc_files, fid2);
+	if (req->lr_fid2 == NULL) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	if (be == NULL) {
+		l9p_respond(req, ENOSYS);
+		return;
+	}
+
+	(*be)(conn->lc_server->ls_backend->softc, req);
+}
+
+/*
+ * Generic handler for read-like operations (read and readdir).
+ *
+ * Backend function must exist.
+ */
+static inline void l9p_read_dispatch(struct l9p_request *req,
+    void (*be)(void *, struct l9p_request *))
+{
+	struct l9p_connection *conn = req->lr_conn;
+
+	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (!req->lr_fid) {
+		l9p_respond(req, EBADF);
+		return;
+	}
+
+	/*
+	 * Adjust so that writing messages (packing data) starts
+	 * right after the count field in the response.
+	 *
+	 * size[4] + Rread(dir)[1] + tag[2] + count[4] = 11
+	 */
+	l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
+	    req->lr_data_iov, &req->lr_data_niov, 11);
+
+	(*be)(conn->lc_server->ls_backend->softc, req);
 }
 
 /*
@@ -336,15 +556,9 @@ l9p_dispatch_tattach(struct l9p_request *req)
 static void
 l9p_dispatch_tclunk(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	conn->lc_server->ls_backend->clunk(conn->lc_server->ls_backend->softc, req);
+	/* clunk is not optional but we can still use the generic dispatch */
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->clunk);
 }
 
 static void
@@ -363,100 +577,36 @@ l9p_dispatch_tflush(struct l9p_request *req)
 static void
 l9p_dispatch_tcreate(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->create) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->create(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->create);
 }
 
 static void
 l9p_dispatch_topen(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->open) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->open(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->open);
 }
 
 static void
 l9p_dispatch_tread(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	/*
-	 * Adjust so that writing messages (packing data) starts
-	 * right after the count field in the response.
-	 *
-	 * size[4] + Rread[1] + tag[2] + count[4] = 11
-	 */
-	l9p_seek_iov(req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
-	    req->lr_data_iov, &req->lr_data_niov, 11);
-
-	conn->lc_server->ls_backend->read(conn->lc_server->ls_backend->softc, req);
+	l9p_read_dispatch(req, req->lr_conn->lc_server->ls_backend->read);
 }
 
 static void
 l9p_dispatch_tremove(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->remove) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->remove(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->remove);
 }
 
 static void
 l9p_dispatch_tstat(struct l9p_request *req)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
-		l9p_respond(req, EBADF);
-		return;
-	}
-
-	if (!conn->lc_server->ls_backend->stat) {
-		l9p_respond(req, ENOSYS);
-		return;
-	}
-
-	conn->lc_server->ls_backend->stat(conn->lc_server->ls_backend->softc, req);
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->stat);
 }
 
 static void
@@ -519,18 +669,174 @@ l9p_dispatch_twrite(struct l9p_request *req)
 static void
 l9p_dispatch_twstat(struct l9p_request *req)
 {
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->wstat);
+}
+
+static void
+l9p_dispatch_tstatfs(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->statfs);
+}
+
+static void
+l9p_dispatch_tlopen(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lopen);
+}
+
+static void
+l9p_dispatch_tlcreate(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lcreate);
+}
+
+static void
+l9p_dispatch_tsymlink(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->symlink);
+}
+
+static void
+l9p_dispatch_tmknod(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->mknod);
+}
+
+static void
+l9p_dispatch_trename(struct l9p_request *req)
+{
+
+	l9p_2fid_dispatch(req, req->lr_req.trename.dfid,
+	    req->lr_conn->lc_server->ls_backend->mknod);
+}
+
+static void
+l9p_dispatch_treadlink(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->readlink);
+}
+
+static void
+l9p_dispatch_tgetattr(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->getattr);
+}
+
+static void
+l9p_dispatch_tsetattr(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->setattr);
+}
+
+static void
+l9p_dispatch_txattrwalk(struct l9p_request *req)
+{
 	struct l9p_connection *conn = req->lr_conn;
 
 	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (!req->lr_fid) {
+	if (req->lr_fid == NULL) {
 		l9p_respond(req, EBADF);
 		return;
 	}
 
-	if (!conn->lc_server->ls_backend->wstat) {
+	/*
+	 * XXX
+	 *
+	 * We need a way to mark a fid as used-for-xattr.  (Or
+	 * maybe these xattr fids should be completely separate
+	 * from file/directory fids?)
+	 *
+	 * For now, this relies on the backend always failing the
+	 * operation.
+	 */
+	if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
+		req->lr_newfid = l9p_connection_alloc_fid(conn,
+		    req->lr_req.twalk.newfid);
+		if (req->lr_newfid == NULL) {
+			l9p_respond(req, EBADF);
+			return;
+		}
+	}
+
+	if (!conn->lc_server->ls_backend->xattrwalk) {
 		l9p_respond(req, ENOSYS);
 		return;
 	}
 
-	conn->lc_server->ls_backend->wstat(conn->lc_server->ls_backend->softc, req);
+	conn->lc_server->ls_backend->xattrwalk(
+	    conn->lc_server->ls_backend->softc, req);
+}
+
+static void
+l9p_dispatch_txattrcreate(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->xattrcreate);
+}
+
+static void
+l9p_dispatch_treaddir(struct l9p_request *req)
+{
+
+	l9p_read_dispatch(req, req->lr_conn->lc_server->ls_backend->readdir);
+}
+
+static void
+l9p_dispatch_tfsync(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->fsync);
+}
+
+static void
+l9p_dispatch_tlock(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lock);
+}
+
+static void
+l9p_dispatch_tgetlock(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->getlock);
+}
+
+static void
+l9p_dispatch_tlink(struct l9p_request *req)
+{
+
+	l9p_2fid_dispatch(req, req->lr_req.tlink.dfid,
+	    req->lr_conn->lc_server->ls_backend->link);
+}
+
+static void
+l9p_dispatch_tmkdir(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->mkdir);
+}
+
+static void
+l9p_dispatch_trenameat(struct l9p_request *req)
+{
+
+	l9p_2fid_dispatch(req, req->lr_req.trenameat.newdirfid,
+	    req->lr_conn->lc_server->ls_backend->renameat);
+}
+
+static void
+l9p_dispatch_tunlinkat(struct l9p_request *req)
+{
+
+	l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->unlinkat);
 }

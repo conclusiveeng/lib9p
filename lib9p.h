@@ -109,11 +109,18 @@ struct l9p_request {
 	size_t lr_data_niov;
 };
 
+/*
+ * Data structure for a fid.  All active fids in one session
+ * are stored in a hash table; the hash table provides the
+ * iterator to process them.  (See also l9p_connection, below.)
+ *
+ * The back-end code has additional data per fid, found via
+ * lo_aux.  Currently this is allocated with a separate calloc().
+ */
 struct l9p_fid {
 	void *lo_aux;
 	uint32_t lo_fid;
 	struct l9p_qid lo_qid;
-	struct l9p_connection *lo_conn;
 };
 
 /* N.B.: these dirents are variable length and for .L only */
@@ -124,17 +131,28 @@ struct l9p_dirent {
 	char *name;
 };
 
+/*
+ * The 9pfs protocol has the notion of a "session", which is
+ * traffic between any two "Tversion" requests.  All fids
+ * (lc_files, below) are specific to one particular session.
+ *
+ * We need a data structure per connection (client/server
+ * pair). This data structure lasts longer than these 9pfs
+ * sessions, but contains the request/response pairs and fids.
+ * Logically, the per-session data should be separate, but
+ * most of the time that would just require an extra
+ * indirection.  Instead, a new session simply clunks all
+ * fids, and otherwise keeps using this same connection.
+ */
 struct l9p_connection {
 	struct l9p_server *lc_server;
 	enum l9p_version lc_version;
-	pthread_mutex_t lc_send_lock;
 	uint32_t lc_msize;
 	uint32_t lc_max_io_size;
 	l9p_send_response_t *lc_send_response;
 	l9p_get_response_buffer_t *lc_get_response_buffer;
 	void *lc_get_response_buffer_aux;
 	void *lc_send_response_aux;
-	void *lc_softc;
 	struct ht lc_files;
 	struct ht lc_requests;
 	LIST_ENTRY(l9p_connection) lc_link;

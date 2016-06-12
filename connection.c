@@ -158,7 +158,6 @@ l9p_connection_alloc_fid(struct l9p_connection *conn, uint32_t fid)
 
 	file = l9p_calloc(1, sizeof (struct l9p_fid));
 	file->lo_fid = fid;
-	file->lo_conn = conn;
 	if (ht_add(&conn->lc_files, fid, file) != 0) {
 		free(file);
 		return (NULL);

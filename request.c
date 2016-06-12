@@ -655,7 +655,7 @@ l9p_dispatch_twrite(struct l9p_request *req)
 
 	/*
 	 * Adjust to point to the data to be written (a la
-	 * l9p_dispatch_tread, but we're pointing into the request
+	 * l9p_read_dispatch, but we're pointing into the request
 	 * buffer rather than the response):
 	 *
 	 * size[4] + Twrite[1] + tag[2] + fid[4] + offset[8] count[4] = 23

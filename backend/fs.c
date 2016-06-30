@@ -108,7 +108,7 @@ static void fs_getlock(void *, struct l9p_request *);
 static void fs_link(void *, struct l9p_request *);
 static void fs_renameat(void *softc, struct l9p_request *req);
 static void fs_unlinkat(void *softc, struct l9p_request *req);
-static void fs_freefid(void *softc, struct l9p_openfile *f);
+static void fs_freefid(void *softc, struct l9p_fid *f);
 
 struct fs_softc {
 	const char *fs_rootpath;
@@ -2050,7 +2050,7 @@ out:
 }
 
 static void
-fs_freefid(void *softc __unused, struct l9p_openfile *fid)
+fs_freefid(void *softc __unused, struct l9p_fid *fid)
 {
 	struct openfile *f = fid->lo_aux;
 

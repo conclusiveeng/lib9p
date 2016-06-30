@@ -99,9 +99,9 @@ struct l9p_request {
 	struct l9p_message lr_resp_msg;
 	union l9p_fcall lr_req;
 	union l9p_fcall lr_resp;
-	struct l9p_openfile *lr_fid;
-	struct l9p_openfile *lr_fid2;
-	struct l9p_openfile *lr_newfid;
+	struct l9p_fid *lr_fid;
+	struct l9p_fid *lr_fid2;
+	struct l9p_fid *lr_newfid;
 	struct l9p_connection *lr_conn;
 	pthread_t lr_thread;
 	void *lr_aux;
@@ -109,7 +109,7 @@ struct l9p_request {
 	size_t lr_data_niov;
 };
 
-struct l9p_openfile {
+struct l9p_fid {
 	void *lo_aux;
 	uint32_t lo_fid;
 	struct l9p_qid lo_qid;
@@ -148,7 +148,7 @@ struct l9p_server {
 
 struct l9p_backend {
 	void *softc;
-	void (*freefid)(void *, struct l9p_openfile *);
+	void (*freefid)(void *, struct l9p_fid *);
 	void (*attach)(void *, struct l9p_request *);
 	void (*clunk)(void *, struct l9p_request *);
 	void (*create)(void *, struct l9p_request *);
@@ -202,10 +202,10 @@ void l9p_connection_on_get_response_buffer(struct l9p_connection *conn,
 void l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
     size_t niov, void *aux);
 void l9p_connection_close(struct l9p_connection *conn);
-struct l9p_openfile *l9p_connection_alloc_fid(struct l9p_connection *conn,
+struct l9p_fid *l9p_connection_alloc_fid(struct l9p_connection *conn,
     uint32_t fid);
 void l9p_connection_remove_fid(struct l9p_connection *conn,
-    struct l9p_openfile *fid);
+    struct l9p_fid *fid);
 
 void l9p_dispatch_request(struct l9p_request *req);
 void l9p_respond(struct l9p_request *req, int errnum);

@@ -129,7 +129,7 @@ void
 l9p_connection_close(struct l9p_connection *conn)
 {
 	struct ht_iter iter;
-	struct l9p_openfile *fid;
+	struct l9p_fid *fid;
 	struct l9p_request *req;
 
 	/* Drain pending requests (if any) */
@@ -151,12 +151,12 @@ l9p_connection_close(struct l9p_connection *conn)
 	ht_destroy(&conn->lc_files);
 }
 
-struct l9p_openfile *
+struct l9p_fid *
 l9p_connection_alloc_fid(struct l9p_connection *conn, uint32_t fid)
 {
-	struct l9p_openfile *file;
+	struct l9p_fid *file;
 
-	file = l9p_calloc(1, sizeof (struct l9p_openfile));
+	file = l9p_calloc(1, sizeof (struct l9p_fid));
 	file->lo_fid = fid;
 	file->lo_conn = conn;
 	if (ht_add(&conn->lc_files, fid, file) != 0) {
@@ -168,7 +168,7 @@ l9p_connection_alloc_fid(struct l9p_connection *conn, uint32_t fid)
 }
 
 void
-l9p_connection_remove_fid(struct l9p_connection *conn, struct l9p_openfile *fid)
+l9p_connection_remove_fid(struct l9p_connection *conn, struct l9p_fid *fid)
 {
 
 	conn->lc_server->ls_backend->freefid(conn->lc_server->ls_backend->softc,

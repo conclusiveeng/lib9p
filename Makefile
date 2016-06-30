@@ -16,4 +16,7 @@ CFLAGS=		-g -O0
 LIBADD=		sbuf
 SUBDIR=		example
 
+cscope: .PHONY
+	cd ${.CURDIR}; cscope -buq $$(find . -name '*.[ch]' -print)
+
 .include <bsd.lib.mk>

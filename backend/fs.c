@@ -809,6 +809,7 @@ fs_walk(void *softc, struct l9p_request *req)
 	struct openfile *newfile;
 	size_t clen, namelen, need;
 	char *comp, *succ, *next, *swtmp;
+	bool atroot;
 	bool dotdot;
 	int i, nwname;
 	int error = 0;
@@ -836,8 +837,13 @@ fs_walk(void *softc, struct l9p_request *req)
 	 * The final fid is based on the last name successfully
 	 * walked.
 	 *
+	 * Note that we *do* get Twalk requests with nwname==0 on files.
+	 *
 	 * Set up "successful name" buffer pointer with base fid name,
 	 * initially.  We'll swap each new success into it as we go.
+	 *
+	 * Invariant: atroot and stat data correspond to current
+	 * (succ) path.
 	 */
 	succ = namebufs[0];
 	next = namebufs[1];
@@ -846,17 +852,18 @@ fs_walk(void *softc, struct l9p_request *req)
 		return (ENAMETOOLONG);
 	if (lstat(succ, &st) < 0)
 		return (errno);
+	atroot = strcmp(succ, sc->fs_rootpath) == 0;
+
 	nwname = (int)req->lr_req.twalk.nwname;
-	/*
-	 * Must have execute permission to search a directory.
-	 * Then, look up each component in the directory.
-	 * Check for ".." along the way, handlng specially
-	 * as needed.  Forbid "/" in name components.
-	 *
-	 * Note that we *do* get Twalk requests with
-	 * nwname==0 on files.
-	 */
-	if (nwname > 0) {
+
+	for (i = 0; i < nwname; i++) {
+		/*
+		 * Must have execute permission to search a directory.
+		 * Then, look up each component in its directory-so-far.
+		 * Check for ".." along the way, handlng specially
+		 * as needed.  Forbid "/" in name components.
+		 *
+		 */
 		if (!S_ISDIR(st.st_mode)) {
 			error = ENOTDIR;
 			goto out;
@@ -868,47 +875,49 @@ fs_walk(void *softc, struct l9p_request *req)
 			error = EPERM;
 			goto out;
 		}
-	}
-	for (i = 0; i < nwname; i++) {
 		comp = req->lr_req.twalk.wname[i];
 		if (strchr(comp, '/') != NULL) {
 			error = EINVAL;
 			break;
 		}
+
 		clen = strlen(comp);
 		dotdot = false;
+
+		/*
+		 * Build next pathname (into "next").  If "..",
+		 * just strip one name component off the success
+		 * name so far.  Since we know this name fits, the
+		 * stripped down version also fits.  Otherwise,
+		 * the name is the base name plus '/' plus the
+		 * component name plus terminating '\0'; this may
+		 * or may not fit.
+		 */
 		if (comp[0] == '.') {
 			if (clen == 1) {
 				error = EINVAL;
 				break;
 			}
-			if (comp[1] == '.' && clen == 2) {
+			if (comp[1] == '.' && clen == 2)
 				dotdot = true;
-				/*
-				 * It's not clear how ".." at
-				 * root should be handled if i > 0.
-				 * Obeying the man page exactly, we
-				 * reset i to 0 and stop, declaring
-				 * terminal success.
-				 */
-				if (strcmp(file->name, sc->fs_rootpath) == 0) {
-					succ = file->name;
-					i = 0;
-					break;
-				}
-			}
 		}
-		/*
-		 * Build next pathname (into "next").  If dotdot,
-		 * just strip one name component off file->name.
-		 * Since we know file->name fits, the stripped down
-		 * version also fits.  Otherwise, the name is the
-		 * base name plus '/' plus the component name
-		 * plus terminating '\0'; this may or may not
-		 * fit.
-		 */
 		if (dotdot) {
-			(void) r_dirname(file->name, next, MAXPATHLEN);
+			/*
+			 * It's not clear how ".." at root should
+			 * be handled when i > 0.  Obeying the man
+			 * page exactly, we reset i to 0 and stop,
+			 * declaring terminal success.
+			 *
+			 * Otherwise, we just climbed up one level
+			 * so adjust "atroot".
+			 */
+			if (atroot) {
+				i = 0;
+				break;
+			}
+			(void) r_dirname(succ, next, MAXPATHLEN);
+			namelen = strlen(next);
+			atroot = strcmp(next, sc->fs_rootpath) == 0;
 		} else {
 			need = namelen + 1 + clen + 1;
 			if (need > MAXPATHLEN) {
@@ -916,13 +925,21 @@ fs_walk(void *softc, struct l9p_request *req)
 				break;
 			}
 			memcpy(next, file->name, namelen);
-			next[namelen] = '/';
-			memcpy(&next[namelen + 1], comp, clen + 1);
+			next[namelen++] = '/';
+			memcpy(&next[namelen], comp, clen + 1);
+			namelen += clen;
+			/*
+			 * Since name is never ".", we are necessarily
+			 * descending below the root now.
+			 */
+			atroot = false;
 		}
-		if (lstat(next, &st) < 0){
+
+		if (lstat(next, &st) < 0) {
 			error = ENOENT;
 			break;
 		}
+
 		/*
 		 * Success: generate qid and swap this
 		 * successful name into place.

@@ -1138,25 +1138,14 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	return (0);
 }
 
-/*
- * Linux O_* flag values do not match BSD ones.
- * It's not at all clear which flags Linux systems actually pass;
- * for now, we will just reject most.
- */
-#define	L_O_CREAT	000000100U
-#define	L_O_EXCL	000000200U
-#define	L_O_TRUNC	000001000U
-#define	L_O_APPEND	000002000U
-#define	L_O_NONBLOCK	000004000U
-#define	L_O_LARGEFILE	000100000U
-#define	L_O_DIRECTORY	000200000U
-#define	L_O_NOFOLLOW	000400000U
-#define	L_O_TMPFILE	020000000U	/* ??? should we get this? */
-
-#define	LO_LC_FORBID	(0xfffffffc & ~(L_O_CREAT | L_O_EXCL | L_O_TRUNC | \
-					L_O_APPEND | L_O_NOFOLLOW | \
-					L_O_DIRECTORY | L_O_LARGEFILE | \
-					L_O_NONBLOCK))
+/* XXX - this will be improved in a later change */
+#define	LO_LC_FORBID	((uint32_t)0xfffffffc & ~(uint32_t)(L9P_L_O_CREAT | \
+					L9P_L_O_EXCL | \
+					L9P_L_O_TRUNC | \
+					L9P_L_O_APPEND | L9P_L_O_NOFOLLOW | \
+					L9P_L_O_DIRECTORY | \
+					L9P_L_O_LARGEFILE | \
+					L9P_L_O_NONBLOCK))
 
 /*
  * Common code for LOPEN and LCREATE requests.
@@ -1202,24 +1191,24 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 	 * (Currently we ignore it.)
 	 */
 	oflags = lflags & O_ACCMODE;
-	if (lflags & L_O_CREAT)
+	if (lflags & L9P_L_O_CREAT)
 		oflags |= O_CREAT;
-	if (lflags & L_O_EXCL)
+	if (lflags & L9P_L_O_EXCL)
 		oflags |= O_EXCL;
-	if (lflags & L_O_TRUNC)
+	if (lflags & L9P_L_O_TRUNC)
 		oflags |= O_TRUNC;
-	if (lflags & L_O_DIRECTORY)
+	if (lflags & L9P_L_O_DIRECTORY)
 		oflags |= O_DIRECTORY;
-	if (lflags & L_O_APPEND)
+	if (lflags & L9P_L_O_APPEND)
 		oflags |= O_APPEND;
-	if (lflags & L_O_NOFOLLOW)
+	if (lflags & L9P_L_O_NOFOLLOW)
 		oflags |= O_NOFOLLOW;
 
 	if (newname == NULL) {
 		/* open: require access, including write if O_TRUNC */
 		if (lstat(file->name, stp) != 0)
 			return (errno);
-		if ((lflags & L_O_TRUNC) && oacc == L9P_OREAD)
+		if ((lflags & L9P_L_O_TRUNC) && oacc == L9P_OREAD)
 			oacc = L9P_ORDWR;
 		if (!check_access(stp, file->uid, oacc))
 			return (EPERM);

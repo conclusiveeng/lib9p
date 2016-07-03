@@ -32,8 +32,10 @@
 #include <sys/queue.h>
 #include "lib9p.h"
 #include "lib9p_impl.h"
+#include "fid.h"
 #include "hashtable.h"
 #include "log.h"
+#include "backend/backend.h"
 
 int
 l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend)

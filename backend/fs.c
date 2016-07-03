@@ -49,8 +49,11 @@
 #include <libgen.h>
 #include "../lib9p.h"
 #include "../lib9p_impl.h"
+#include "../fid.h"
 #include "../log.h"
 #include "../rfuncs.h"
+#include "backend.h"
+#include "fs.h"
 
 #if defined(__FreeBSD__)
   #include <sys/param.h>

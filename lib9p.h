@@ -83,6 +83,8 @@ struct l9p_message {
 	size_t lm_size;
 };
 
+struct l9p_fid;
+
 /*
  * Data structure for a request/response pair (Tfoo/Rfoo).
  *
@@ -107,19 +109,6 @@ struct l9p_request {
 	void *lr_aux;
 	struct iovec lr_data_iov[L9P_MAX_IOV];
 	size_t lr_data_niov;
-};
-
-/*
- * Data structure for a fid.  All active fids in one session
- * are stored in a hash table; the hash table provides the
- * iterator to process them.  (See also l9p_connection, below.)
- *
- * The back-end code has additional data per fid, found via
- * lo_aux.  Currently this is allocated with a separate calloc().
- */
-struct l9p_fid {
-	void *lo_aux;
-	uint32_t lo_fid;
 };
 
 /* N.B.: these dirents are variable length and for .L only */
@@ -157,45 +146,11 @@ struct l9p_connection {
 	LIST_ENTRY(l9p_connection) lc_link;
 };
 
+struct l9p_backend;
 struct l9p_server {
 	struct l9p_backend *ls_backend;
 	enum l9p_version ls_max_version;
 	LIST_HEAD(, l9p_connection) ls_conns;
-};
-
-struct l9p_backend {
-	void *softc;
-	void (*freefid)(void *, struct l9p_fid *);
-	int (*attach)(void *, struct l9p_request *);
-	int (*clunk)(void *, struct l9p_request *);
-	int (*create)(void *, struct l9p_request *);
-	int (*flush)(void *, struct l9p_request *);
-	int (*open)(void *, struct l9p_request *);
-	int (*read)(void *, struct l9p_request *);
-	int (*remove)(void *, struct l9p_request *);
-	int (*stat)(void *, struct l9p_request *);
-	int (*walk)(void *, struct l9p_request *);
-	int (*write)(void *, struct l9p_request *);
-	int (*wstat)(void *, struct l9p_request *);
-	int (*statfs)(void *, struct l9p_request *);
-	int (*lopen)(void *, struct l9p_request *);
-	int (*lcreate)(void *, struct l9p_request *);
-	int (*symlink)(void *, struct l9p_request *);
-	int (*mknod)(void *, struct l9p_request *);
-	int (*rename)(void *, struct l9p_request *);
-	int (*readlink)(void *, struct l9p_request *);
-	int (*getattr)(void *, struct l9p_request *);
-	int (*setattr)(void *, struct l9p_request *);
-	int (*xattrwalk)(void *, struct l9p_request *);
-	int (*xattrcreate)(void *, struct l9p_request *);
-	int (*readdir)(void *, struct l9p_request *);
-	int (*fsync)(void *, struct l9p_request *);
-	int (*lock)(void *, struct l9p_request *);
-	int (*getlock)(void *, struct l9p_request *);
-	int (*link)(void *, struct l9p_request *);
-	int (*mkdir)(void *, struct l9p_request *);
-	int (*renameat)(void *, struct l9p_request *);
-	int (*unlinkat)(void *, struct l9p_request *);
 };
 
 int l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
@@ -236,7 +191,5 @@ void l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
     struct sbuf *sb);
 void l9p_freefcall(union l9p_fcall *fcall);
 void l9p_freestat(struct l9p_stat *stat);
-
-int l9p_backend_fs_init(struct l9p_backend **backendp, const char *root);
 
 #endif  /* LIB9P_LIB9P_H */

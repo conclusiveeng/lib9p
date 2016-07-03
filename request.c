@@ -42,6 +42,7 @@
 #include "hashtable.h"
 #include "log.h"
 #include "linux_errno.h"
+#include "backend/backend.h"
 
 #define N(x)    (sizeof(x) / sizeof(x[0]))
 

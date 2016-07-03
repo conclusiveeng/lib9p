@@ -584,7 +584,6 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 
 	case L9P_TCLUNK:
 		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
-		sbuf_printf(sb, " fid=%d", fcall->hdr.fid);
 		return;
 
 	case L9P_RCLUNK:

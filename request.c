@@ -200,10 +200,29 @@ l9p_dispatch_request(struct l9p_request *req)
 }
 
 /*
+ * Translate BSD errno to 9P2000/9P2000.u errno.
+ */
+static inline int
+e29p(int errnum)
+{
+	static int const table[] = {
+		[ENOTEMPTY] = EPERM,
+		[EDQUOT] = EPERM,
+		[ENOSYS] = EPERM,	/* ??? */
+	};
+
+	if ((size_t)errnum < N(table) && table[errnum] != 0)
+		return (table[errnum]);
+	if (errnum <= ERANGE)
+		return (errnum);
+	return (EIO);			/* ??? */
+}
+
+/*
  * Translate BSD errno to Linux errno.
  */
 static inline int
-to_linux(int errnum)
+e2linux(int errnum)
 {
 	static int const table[] = {
 		[EDEADLK] = LINUX_EDEADLK,
@@ -328,11 +347,11 @@ l9p_respond(struct l9p_request *req, int errnum)
 	else {
 		if (conn->lc_version == L9P_2000L) {
 			req->lr_resp.hdr.type = L9P_RLERROR;
-			req->lr_resp.error.errnum = (uint32_t)to_linux(errnum);
+			req->lr_resp.error.errnum = (uint32_t)e2linux(errnum);
 		} else {
 			req->lr_resp.hdr.type = L9P_RERROR;
 			req->lr_resp.error.ename = strerror(errnum);
-			req->lr_resp.error.errnum = (uint32_t)errnum;
+			req->lr_resp.error.errnum = (uint32_t)e29p(errnum);
 		}
 	}
 

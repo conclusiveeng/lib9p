@@ -1779,11 +1779,17 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 	l9p_init_msg(&msg, req, L9P_PACK);
 	while ((dp = readdir(file->dir)) != NULL) {
 		/*
-		 * Should we skip "." and ".."?  I think so...
+		 * Although "." is forbidden in naming and ".." is
+		 * special cased, testing shows that we must transmit
+		 * them through readdir.  (For ".." at root, we
+		 * should perhaps alter the inode number, but not
+		 * yet.)
 		 */
+#ifdef wrong
 		if (dp->d_name[0] == '.' &&
 		    (dp->d_namlen == 1 || strcmp(dp->d_name, "..") == 0))
 			continue;
+#endif
 
 		/*
 		 * TODO: we do a full lstat here; could use dp->d_*

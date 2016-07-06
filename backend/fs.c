@@ -1515,7 +1515,7 @@ fs_readlink(void *softc __unused, struct l9p_request *req)
 {
 	struct openfile *file;
 	ssize_t linklen;
-	char buf[MAXPATHLEN + 1];
+	char buf[MAXPATHLEN];
 	int error = 0;
 
 	file = req->lr_fid->lo_aux;
@@ -1524,9 +1524,10 @@ fs_readlink(void *softc __unused, struct l9p_request *req)
 	linklen = readlink(file->name, buf, sizeof(buf));
 	if (linklen < 0)
 		error = errno;
-	else if (linklen > MAXPATHLEN)
+	else if (linklen >= sizeof(buf))
 		error = ENOMEM; /* todo: allocate dynamically */
-	else if ((req->lr_resp.rreadlink.target = strdup(buf)) == NULL)
+	else if ((req->lr_resp.rreadlink.target = strndup(buf,
+	    (size_t)linklen)) == NULL)
 		error = ENOMEM;
 	return (error);
 }

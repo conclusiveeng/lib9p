@@ -669,8 +669,16 @@ fs_open(void *softc __unused, struct l9p_request *req)
 
 	assert(file != NULL);
 
-	if (stat(file->name, &st) != 0)
+	/*
+	 * Caller should never be opening a symlink, as it
+	 * should have been resolved by this point.  (For the
+	 * 9P2000 protocol, we probably should deny -- at
+	 * the higher level -- that symlinks even exist.)
+	 */
+	if (lstat(file->name, &st) != 0)
 		return (errno);
+	if (S_ISLNK(st.st_mode))
+		return (EPERM);
 
 	if (!check_access(&st, file->uid, req->lr_req.topen.mode))
 		return (EPERM);

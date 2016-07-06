@@ -10,7 +10,8 @@ SRCS=		pack.c \
 		backend/fs.c
 
 INCS=		lib9p.h
-CFLAGS=		-g -O0
+CC=clang
+CFLAGS=		-g -O2 -DL9P_DEBUG=L9P_DEBUG
 # Note: to turn on debug, use -DL9P_DEBUG=L9P_DEBUG
 
 LIBADD=		sbuf

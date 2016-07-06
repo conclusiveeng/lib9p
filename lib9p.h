@@ -120,7 +120,6 @@ struct l9p_request {
 struct l9p_fid {
 	void *lo_aux;
 	uint32_t lo_fid;
-	struct l9p_qid lo_qid;
 };
 
 /* N.B.: these dirents are variable length and for .L only */

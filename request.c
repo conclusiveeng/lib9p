@@ -321,7 +321,13 @@ l9p_respond(struct l9p_request *req, int errnum)
 	switch (req->lr_req.hdr.type) {
 
 	case L9P_TATTACH:
-		if (errnum != 0)
+		/*
+		 * XXX logically this should use lr_newfid,
+		 * since the fid is always actually new, but
+		 * for now stick with minimal code changes.
+		 * This code will go away soon anyway!
+		 */
+		if (errnum != 0 && req->lr_fid != NULL)
 			l9p_connection_remove_fid(conn, req->lr_fid);
 
 		break;
@@ -556,7 +562,7 @@ l9p_dispatch_tattach(struct l9p_request *req)
 
 	req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.hdr.fid);
 	if (req->lr_fid == NULL)
-		req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+		return (EINVAL);
 
 	return (conn->lc_server->ls_backend->attach(conn->lc_server->ls_backend->softc, req));
 }

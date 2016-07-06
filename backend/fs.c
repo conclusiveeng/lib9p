@@ -330,27 +330,55 @@ fs_attach(void *softc, struct l9p_request *req)
 	struct fs_softc *sc = (struct fs_softc *)softc;
 	struct openfile *file;
 	struct passwd *pwd;
+	struct stat st;
 	uid_t uid;
+	int error;
 
 	assert(req->lr_fid != NULL);
 
-	file = open_fid(sc->fs_rootpath);
-	req->lr_fid->lo_qid.type = L9P_QTDIR;
-	req->lr_fid->lo_qid.path = (uintptr_t)req->lr_fid;
-	req->lr_fid->lo_aux = file;
-	req->lr_resp.rattach.qid = req->lr_fid->lo_qid;
-
 	uid = req->lr_req.tattach.n_uname;
-	if (req->lr_conn->lc_version >= L9P_2000U && uid != (uid_t)-1)
+	if (req->lr_conn->lc_version >= L9P_2000U && uid != (uid_t)-1) {
 		pwd = getpwuid(uid);
-	else
+		if (pwd == NULL)
+			L9P_LOG(L9P_DEBUG,
+			    "Tattach: uid %lu: no such user",
+			    (u_long)uid);
+	} else {
 		pwd = getpwnam(req->lr_req.tattach.uname);
+		if (pwd == NULL)
+			L9P_LOG(L9P_DEBUG,
+			    "Tattach: %s: no such user",
+			    req->lr_req.tattach.uname);
+	}
 
 	if (pwd == NULL)
 		return (EPERM);
 
+	error = 0;
+	if (lstat(sc->fs_rootpath, &st) != 0)
+		error = errno;
+	else if (!S_ISDIR(st.st_mode))
+		error = ENOTDIR;
+	if (error) {
+		L9P_LOG(L9P_DEBUG,
+		    "Tattach: denying access to \"%s\": %s",
+		    sc->fs_rootpath, strerror(error));
+		/*
+		 * Pass ENOENT and ENOTDIR through for diagnosis;
+		 * others become EPERM.  This should not leak too
+		 * much security.
+		 */
+		return (error == ENOENT || error == ENOTDIR ? error : EPERM);
+	}
+
+	file = open_fid(sc->fs_rootpath);
+	if (file == NULL)
+		return (ENOMEM);
+
 	file->uid = pwd->pw_uid;
 	file->gid = pwd->pw_gid;
+	req->lr_fid->lo_aux = file;
+	generate_qid(&st, &req->lr_resp.rattach.qid);
 	return (0);
 }
 

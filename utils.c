@@ -359,9 +359,8 @@ l9p_describe_perm(const char *str, uint32_t mode, struct sbuf *sb)
 	char pbuf[12];
 
 	strmode(mode & 0777, pbuf);
-	mode &= ~(uint32_t)0777;
-	if (mode != 0)
-		sbuf_printf(sb, "%s%" PRIx32 "<%.9s>", str, mode, pbuf + 1);
+	if ((mode & ~(uint32_t)0777) != 0)
+		sbuf_printf(sb, "%s%0x" PRIx32 "<%.9s>", str, mode, pbuf + 1);
 	else
 		sbuf_printf(sb, "%s<%.9s>", str, pbuf + 1);
 }

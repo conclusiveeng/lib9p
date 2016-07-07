@@ -32,6 +32,7 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/uio.h>
 #if defined(__FreeBSD__)
 #include <sys/sbuf.h>
@@ -58,6 +59,7 @@ static void l9p_describe_fid(const char *, uint32_t, struct sbuf *);
 static void l9p_describe_mode(const char *, uint32_t, struct sbuf *);
 static void l9p_describe_name(const char *, char *, struct sbuf *);
 static void l9p_describe_perm(const char *, uint32_t, struct sbuf *);
+static void l9p_describe_lperm(const char *, uint32_t, struct sbuf *);
 static void l9p_describe_qid(const char *, struct l9p_qid *, struct sbuf *);
 static void l9p_describe_l9stat(const char *, struct l9p_stat *,
     enum l9p_version, struct sbuf *);
@@ -360,7 +362,7 @@ l9p_describe_perm(const char *str, uint32_t mode, struct sbuf *sb)
 
 	strmode(mode & 0777, pbuf);
 	if ((mode & ~(uint32_t)0777) != 0)
-		sbuf_printf(sb, "%s%0x" PRIx32 "<%.9s>", str, mode, pbuf + 1);
+		sbuf_printf(sb, "%s0x%" PRIx32 "<%.9s>", str, mode, pbuf + 1);
 	else
 		sbuf_printf(sb, "%s<%.9s>", str, pbuf + 1);
 }
@@ -389,7 +391,33 @@ l9p_describe_ext_perm(const char *str, uint32_t mode, struct sbuf *sb)
 	};
 	bool need_sep;
 
-	sbuf_printf(sb, "%s0x%" PRIx32 "[", str, mode);
+	sbuf_printf(sb, "%s[", str);
+	need_sep = l9p_describe_bits(NULL, mode & ~(uint32_t)0777, NULL,
+	    bits, sb);
+	l9p_describe_perm(need_sep ? "," : "", mode & 0777, sb);
+	sbuf_cat(sb, "]");
+}
+
+/*
+ * Show Linux-specific permissions: regular permissions, but also
+ * the S_IFMT field.
+ */
+static void
+l9p_describe_lperm(const char *str, uint32_t mode, struct sbuf *sb)
+{
+	static const struct descbits bits[] = {
+		{ S_IFMT,	S_IFIFO,	"S_IFIFO" },
+		{ S_IFMT,	S_IFCHR,	"S_IFCHR" },
+		{ S_IFMT,	S_IFDIR,	"S_IFDIR" },
+		{ S_IFMT,	S_IFBLK,	"S_IFBLK" },
+		{ S_IFMT,	S_IFREG,	"S_IFREG" },
+		{ S_IFMT,	S_IFLNK,	"S_IFLNK" },
+		{ S_IFMT,	S_IFSOCK,	"S_IFSOCK" },
+		{ 0, 0, NULL }
+	};
+	bool need_sep;
+
+	sbuf_printf(sb, "%s[", str);
 	need_sep = l9p_describe_bits(NULL, mode & ~(uint32_t)0777, NULL,
 	    bits, sb);
 	l9p_describe_perm(need_sep ? "," : "", mode & 0777, sb);
@@ -912,7 +940,8 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 		l9p_describe_name(" name=", fcall->tlcreate.name, sb);
 		/* confusing: "flags" is open-mode, "mode" is permissions */
 		l9p_describe_lflags(" flags=", fcall->tlcreate.flags, sb);
-		l9p_describe_perm(" mode=", fcall->tlcreate.mode, sb);
+		/* TLCREATE mode/permissions have S_IFREG (0x8000) set */
+		l9p_describe_lperm(" mode=", fcall->tlcreate.mode, sb);
 		l9p_describe_ugid(" gid=", fcall->tlcreate.gid, sb);
 		return;
 
@@ -935,9 +964,13 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	case L9P_TMKNOD:
 		l9p_describe_fid(" dfid=", fcall->hdr.fid, sb);
 		l9p_describe_name(" name=", fcall->tmknod.name, sb);
-		/* can't just use permission decode: mode contains blk/chr */
-		sbuf_printf(sb, " mode=0x%08x major=%u minor=%u",
-		    fcall->tmknod.mode,
+		/*
+		 * TMKNOD mode/permissions have S_IFBLK/S_IFCHR/S_IFIFO
+		 * bits.  The major and minor values are only meaningful
+		 * for S_IFBLK and S_IFCHR, but just decode always here.
+		 */
+		l9p_describe_lperm(" mode=", fcall->tmknod.mode, sb);
+		sbuf_printf(sb, " major=%u minor=%u",
 		    fcall->tmknod.major, fcall->tmknod.minor);
 		l9p_describe_ugid(" gid=", fcall->tmknod.gid, sb);
 		return;
@@ -1120,7 +1153,8 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	case L9P_TMKDIR:
 		l9p_describe_fid(" fid=", fcall->hdr.fid, sb);
 		l9p_describe_name(" name=", fcall->tmkdir.name, sb);
-		l9p_describe_perm(" mode=", fcall->tmkdir.mode, sb);
+		/* TMKDIR mode/permissions have S_IFDIR set */
+		l9p_describe_lperm(" mode=", fcall->tmkdir.mode, sb);
 		l9p_describe_ugid(" gid=", fcall->tmkdir.gid, sb);
 		return;
 

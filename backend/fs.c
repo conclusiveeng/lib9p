@@ -78,10 +78,30 @@
   #endif
 #endif
 
+struct fs_softc {
+	const char *fs_rootpath;
+	bool fs_readonly;
+};
+
+struct openfile {
+	DIR *dir;
+	int fd;
+	char *name;
+	uid_t uid;
+	gid_t gid;
+};
+
+/*
+ * Internal functions (except inline functions).
+ */
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
 static void generate_qid(struct stat *, struct l9p_qid *);
+
+/*
+ * Internal functions implementing backend.
+ */
 static int fs_attach(void *, struct l9p_request *);
 static int fs_clunk(void *, struct l9p_request *);
 static int fs_create(void *, struct l9p_request *);
@@ -112,27 +132,6 @@ static int fs_link(void *, struct l9p_request *);
 static int fs_renameat(void *softc, struct l9p_request *req);
 static int fs_unlinkat(void *softc, struct l9p_request *req);
 static void fs_freefid(void *softc, struct l9p_fid *f);
-
-struct fs_softc {
-	const char *fs_rootpath;
-	bool fs_readonly;
-	TAILQ_HEAD(, fs_tree) fs_auxtrees;
-};
-
-struct fs_tree {
-	const char *fst_name;
-	const char *fst_path;
-	bool fst_readonly;
-	TAILQ_ENTRY(fs_tree) fst_link;
-};
-
-struct openfile {
-	DIR *dir;
-	int fd;
-	char *name;
-	uid_t uid;
-	gid_t gid;
-};
 
 /*
  * Allocate new open-file data structure to attach to a fid.

@@ -647,8 +647,7 @@ l9p_describe_unlinkat_flags(const char *str, uint32_t flags, struct sbuf *sb)
 		{ 0, 0, NULL }
 	};
 
-	(void)str;
-	(void) l9p_describe_bits(" flags=", flags, "[]", bits, sb);
+	(void) l9p_describe_bits(str, flags, "[]", bits, sb);
 }
 
 static const char *

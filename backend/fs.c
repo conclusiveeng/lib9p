@@ -134,6 +134,9 @@ struct openfile {
 	gid_t gid;
 };
 
+/*
+ * Allocate new open-file data structure to attach to a fid.
+ */
 static struct openfile *
 open_fid(const char *path)
 {
@@ -142,6 +145,10 @@ open_fid(const char *path)
 	ret = l9p_calloc(1, sizeof(*ret));
 	ret->fd = -1;
 	ret->name = strdup(path);
+	if (ret->name == NULL) {
+		free(ret);
+		return (NULL);
+	}
 	return (ret);
 }
 

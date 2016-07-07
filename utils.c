@@ -305,6 +305,7 @@ l9p_describe_lflags(const char *str, uint32_t flags, struct sbuf *sb)
 
 	    { L9P_L_O_APPEND,	L9P_L_O_APPEND,		"O_APPEND" },
 	    { L9P_L_O_CLOEXEC,	L9P_L_O_CLOEXEC,	"O_CLOEXEC" },
+	    { L9P_L_O_CREAT,	L9P_L_O_CREAT,		"O_CREAT" },
 	    { L9P_L_O_DIRECT,	L9P_L_O_DIRECT,		"O_DIRECT" },
 	    { L9P_L_O_DIRECTORY, L9P_L_O_DIRECTORY,	"O_DIRECTORY" },
 	    { L9P_L_O_DSYNC,	L9P_L_O_DSYNC,		"O_DSYNC" },

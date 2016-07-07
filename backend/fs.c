@@ -1966,20 +1966,31 @@ fs_renameat(void *softc, struct l9p_request *req)
 	return (error);
 }
 
+/*
+ * Unlink file in given directory, or remove directory in given
+ * directory, based on flags.
+ */
 static int
 fs_unlinkat(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
 	struct openfile *file;
+	struct l9p_fid *dir;
 	struct stat st;
 	char *name;
+	char newname[MAXPATHLEN];
 	int error;
-
-	file = req->lr_fid->lo_aux;
-	assert(file);
 
 	if (sc->fs_readonly)
 		return (EROFS);
+
+	dir = req->lr_fid;
+	name = req->lr_req.tunlinkat.name;
+	error = fs_buildname(dir, name, newname, sizeof(newname));
+	if (error)
+		return (error);
+
+	file = dir->lo_aux;
 
 	/* Require write access to directory. */
 	if (lstat(file->name, &st))
@@ -1987,12 +1998,13 @@ fs_unlinkat(void *softc, struct l9p_request *req)
 	if (!check_access(&st, file->uid, L9P_OWRITE))
 		return (EPERM);
 
-	if (asprintf(&name, "%s/%s",
-		    file->name, req->lr_req.tunlinkat.name) < 0)
-		return(ENAMETOOLONG);
-
-	error = unlink(name);
-	free(name);
+	if (req->lr_req.tunlinkat.flags & L9PL_AT_REMOVEDIR) {
+		if (rmdir(newname) != 0)
+			error = errno;
+	} else {
+		if (unlink(newname) != 0)
+			error = errno;
+	}
 	return (error);
 }
 

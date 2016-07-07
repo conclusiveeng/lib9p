@@ -566,6 +566,15 @@ struct l9p_f_trenameat {
 	char *newname;
 };
 
+/*
+ * Flags in Tunlinkat (which re-uses f_tlcreate data structure but
+ * with different meaning).
+ */
+enum l9p_l_unlinkat_flags {
+	/* not sure if any other AT_* flags are passed through */
+	L9PL_AT_REMOVEDIR =	0x0200,
+};
+
 union l9p_fcall {
 	struct l9p_hdr hdr;
 	struct l9p_f_version version;

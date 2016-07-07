@@ -70,6 +70,7 @@ static void l9p_describe_readdir(struct sbuf *, struct l9p_f_io *);
 static void l9p_describe_size(const char *, uint64_t, struct sbuf *);
 static void l9p_describe_ugid(const char *, uint32_t, struct sbuf *);
 static void l9p_describe_getattr_mask(uint64_t, struct sbuf *);
+static void l9p_describe_unlinkat_flags(const char *, uint32_t, struct sbuf *);
 static const char *lookup_linux_errno(uint32_t);
 
 /*
@@ -631,7 +632,22 @@ l9p_describe_getattr_mask(uint64_t request_mask, struct sbuf *sb)
 		{ 0, 0, NULL }
 	};
 
-	(void) l9p_describe_bits(" request_mask=", request_mask, "[]", bits, sb);
+	(void) l9p_describe_bits(" request_mask=", request_mask, "[]", bits,
+	    sb);
+}
+
+/*
+ * Decode Tunlinkat flags.
+ */
+static void
+l9p_describe_unlinkat_flags(const char *str, uint32_t flags, struct sbuf *sb)
+{
+	static const struct descbits bits[] = {
+		{ L9PL_AT_REMOVEDIR, L9PL_AT_REMOVEDIR, "AT_REMOVEDIR" },
+		{ 0, 0, NULL }
+	};
+
+	(void) l9p_describe_bits(" flags=", flags, "[]", bits, sb);
 }
 
 static const char *
@@ -1177,8 +1193,8 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	case L9P_TUNLINKAT:
 		l9p_describe_fid(" dirfd=", fcall->hdr.fid, sb);
 		l9p_describe_name(" name=", fcall->tunlinkat.name, sb);
-		/* What are these unlinkat flags anyway? */
-		sbuf_printf(sb, " flags=0x%08" PRIx32, fcall->tunlinkat.flags);
+		l9p_describe_unlinkat_flags(" flags=",
+		    fcall->tunlinkat.flags, sb);
 		return;
 
 	case L9P_RUNLINKAT:

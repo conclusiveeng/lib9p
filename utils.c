@@ -221,9 +221,15 @@ l9p_describe_bits(const char *str, uint64_t value, const char *oc,
 			sep = ",";
 			printed = true;
 
-			/* Clear matched bits iff next mask differs. */
-			if (db->db_mask != db[1].db_mask)
-				value &= ~db->db_mask;
+			/*
+			 * Clear the field, and make sure we
+			 * won't match a zero-valued field with
+			 * this same mask.
+			 */
+			value &= ~db->db_mask;
+			while (db[1].db_mask == db->db_mask &&
+			    db[1].db_name != NULL)
+				db++;
 		}
 	}
 	if (value != 0) {

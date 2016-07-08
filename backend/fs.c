@@ -1238,7 +1238,7 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 		return (EROFS);
 
 	if (lflags & LO_LC_FORBID)
-		return (ENOTSUP);
+		return (EOPNOTSUPP);
 
 	/*
 	 * What if anything should we do with O_NONBLOCK and O_NOCTTY?
@@ -1744,13 +1744,13 @@ out:
 static int
 fs_xattrwalk(void *softc __unused, struct l9p_request *req __unused)
 {
-	return (ENOTSUP);
+	return (EOPNOTSUPP);
 }
 
 static int
 fs_xattrcreate(void *softc __unused, struct l9p_request *req __unused)
 {
-	return (ENOTSUP);
+	return (EOPNOTSUPP);
 }
 
 static int
@@ -1839,14 +1839,14 @@ static int
 fs_lock(void *softc __unused, struct l9p_request *req __unused)
 {
 
-	return (ENOTSUP);
+	return (EOPNOTSUPP);
 }
 
 static int
 fs_getlock(void *softc __unused, struct l9p_request *req __unused)
 {
 
-	return (ENOTSUP);
+	return (EOPNOTSUPP);
 }
 
 static int

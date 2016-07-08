@@ -307,6 +307,8 @@ e2linux(int errnum)
 		return (table[errnum]);
 	if (errnum <= ERANGE)
 		return (errnum);
+
+	L9P_LOG(L9P_WARNING, "cannot map errno %d to anything reasonable", errnum);
 	return (LINUX_ENOTRECOVERABLE);	/* ??? */
 }
 

@@ -221,7 +221,7 @@ l9p_describe_bits(const char *str, uint64_t value, const char *oc,
 	for (; db->db_name != NULL; db++) {
 		if ((value & db->db_mask) == db->db_match) {
 			sbuf_printf(sb, "%s%s", sep, db->db_name);
-			sep = ",";
+			sep = (char *)",";
 			printed = true;
 
 			/*

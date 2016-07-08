@@ -381,7 +381,7 @@ fs_attach(void *softc, struct l9p_request *req)
 			    req->lr_req.tattach.uname);
 	}
 
-	if (pwd == NULL)
+	if (pwd == NULL && req->lr_conn->lc_version != L9P_2000L)
 		return (EPERM);
 
 	error = 0;
@@ -405,8 +405,8 @@ fs_attach(void *softc, struct l9p_request *req)
 	if (file == NULL)
 		return (ENOMEM);
 
-	file->uid = pwd->pw_uid;
-	file->gid = pwd->pw_gid;
+	file->uid = pwd != NULL ? pwd->pw_uid : uid;
+	file->gid = pwd != NULL ? pwd->pw_gid : (uid_t)-1;
 	req->lr_fid->lo_aux = file;
 	generate_qid(&st, &req->lr_resp.rattach.qid);
 	return (0);

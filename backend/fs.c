@@ -1194,10 +1194,12 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 #define	LO_LC_FORBID	((uint32_t)0xfffffffc & ~(uint32_t)(L9P_L_O_CREAT | \
 					L9P_L_O_EXCL | \
 					L9P_L_O_TRUNC | \
-					L9P_L_O_APPEND | L9P_L_O_NOFOLLOW | \
+					L9P_L_O_APPEND | \
+					L9P_L_O_NOFOLLOW | \
 					L9P_L_O_DIRECTORY | \
 					L9P_L_O_LARGEFILE | \
-					L9P_L_O_NONBLOCK))
+					L9P_L_O_NONBLOCK | \
+					L9P_L_O_NOCTTY))
 
 /*
  * Common code for LOPEN and LCREATE requests.
@@ -1239,7 +1241,7 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 		return (ENOTSUP);
 
 	/*
-	 * What if anything should we do with O_NONBLOCK?
+	 * What if anything should we do with O_NONBLOCK and O_NOCTTY?
 	 * (Currently we ignore it.)
 	 */
 	oflags = lflags & O_ACCMODE;

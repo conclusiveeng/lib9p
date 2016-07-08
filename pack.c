@@ -442,7 +442,7 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pu32(msg, &fcall->tattach.afid);
 		l9p_pustring(msg, &fcall->tattach.uname);
 		l9p_pustring(msg, &fcall->tattach.aname);
-		if (version == L9P_2000U)
+		if (version >= L9P_2000U)
 			l9p_pu32(msg, &fcall->tattach.n_uname);
 		break;
 

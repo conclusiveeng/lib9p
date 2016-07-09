@@ -319,6 +319,7 @@ l9p_describe_lflags(const char *str, uint32_t flags, struct sbuf *sb)
 	    { L9P_L_O_NOCTTY,	L9P_L_O_NOCTTY,		"O_NOCTTY" },
 	    { L9P_L_O_NOFOLLOW,	L9P_L_O_NOFOLLOW,	"O_NOFOLLOW" },
 	    { L9P_L_O_NONBLOCK,	L9P_L_O_NONBLOCK,	"O_NONBLOCK" },
+	    { L9P_L_O_PATH,	L9P_L_O_PATH,		"O_PATH" },
 	    { L9P_L_O_SYNC,	L9P_L_O_SYNC,		"O_SYNC" },
 	    { L9P_L_O_TMPFILE,	L9P_L_O_TMPFILE,	"O_TMPFILE" },
 	    { L9P_L_O_TMPFILE,	L9P_L_O_TMPFILE,	"O_TMPFILE" },

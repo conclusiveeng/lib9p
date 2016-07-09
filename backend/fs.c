@@ -493,7 +493,7 @@ internal_mksocket(struct openfile *file __unused, char *newname,
 #ifdef HAVE_BINDAT
 	/* Try bindat() if needed. */
 	if (strlen(path) >= sizeof(sun.sun_path)) {
-		fd = open(file->name, O_RDONLY);
+		fd = open(file->name, O_RDONLY | O_NOFOLLOW);
 		if (fd >= 0)
 			path = reqname;
 	}
@@ -648,7 +648,7 @@ fs_create(void *softc, struct l9p_request *req)
 		 */
 		mode &= (~0666 | st.st_mode) & 0666;
 		file->fd = open(newname,
-		    O_CREAT | O_TRUNC | req->lr_req.tcreate.mode,
+		    O_CREAT | O_TRUNC | O_NOFOLLOW | req->lr_req.tcreate.mode,
 		    mode);
 		if (file->fd < 0)
 			error = errno;
@@ -701,7 +701,8 @@ fs_open(void *softc __unused, struct l9p_request *req)
 		if (file->dir == NULL)
 			return (EPERM);	/* ??? */
 	} else {
-		file->fd = open(file->name, req->lr_req.topen.mode);
+		file->fd = open(file->name,
+		    req->lr_req.topen.mode | O_NOFOLLOW);
 		if (file->fd < 0)
 			return (EPERM);
 	}
@@ -1255,8 +1256,8 @@ fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
 		oflags |= O_DIRECTORY;
 	if (lflags & L9P_L_O_APPEND)
 		oflags |= O_APPEND;
-	if (lflags & L9P_L_O_NOFOLLOW)
-		oflags |= O_NOFOLLOW;
+
+	oflags |= O_NOFOLLOW;
 
 	if (newname == NULL) {
 		/* open: require access, including write if O_TRUNC */
@@ -2035,7 +2036,11 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 {
 	struct l9p_backend *backend;
 	struct fs_softc *sc;
+	const char *rroot;
 
+	rroot = realpath(root, NULL);
+	if (rroot == NULL)
+		return (-1);
 	backend = l9p_malloc(sizeof(*backend));
 	backend->attach = fs_attach;
 	backend->clunk = fs_clunk;
@@ -2070,7 +2075,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));
-	sc->fs_rootpath = strdup(root);
+	sc->fs_rootpath = rroot;
 	sc->fs_readonly = false;
 	backend->softc = sc;
 

@@ -95,9 +95,12 @@ struct openfile {
  * Internal functions (except inline functions).
  */
 static int fs_buildname(struct l9p_fid *, char *, char *, size_t);
+static int fs_oflags_dotu(int, int *);
+static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
+static bool check_access(struct stat *, uid_t, enum l9p_omode);
 static void generate_qid(struct stat *, struct l9p_qid *);
 
 /*
@@ -133,6 +136,193 @@ static int fs_link(void *, struct l9p_request *);
 static int fs_renameat(void *softc, struct l9p_request *req);
 static int fs_unlinkat(void *softc, struct l9p_request *req);
 static void fs_freefid(void *softc, struct l9p_fid *f);
+
+/*
+ * Convert from 9p2000 open/create mode to Unix-style O_* flags.
+ * This includes 9p2000.u extensions, but not 9p2000.L protocol,
+ * which has entirely different open, create, etc., flag bits.
+ *
+ * The <mode> given here is the one-byte (uint8_t) "mode"
+ * argument to Tcreate or Topen, so it can have at most 8 bits.
+ *
+ * https://swtch.com/plan9port/man/man9/open.html and
+ * http://plan9.bell-labs.com/magic/man2html/5/open
+ * both say:
+ *
+ *   The [low two bits of the] mode field determines the
+ *   type of I/O ... [I]f mode has the OTRUNC (0x10) bit
+ *   set, the file is to be truncated, which requires write
+ *   permission ...; if the mode has the ORCLOSE (0x40) bit
+ *   set, the file is to be removed when the fid is clunked,
+ *   which requires permission to remove the file from its
+ *   directory.  All other bits in mode should be zero.  It
+ *   is illegal to write a directory, truncate it, or
+ *   attempt to remove it on close.
+ *
+ * 9P2000.u may add ODIRECT (0x80); this is not completely clear.
+ * The fcall.h header defines OCEXEC (0x20) as well, but it makes
+ * no sense to send this to a server.  There seem to be no bits
+ * 0x04 and 0x08.
+ *
+ * We always turn on O_NOCTTY since as a server, we never want
+ * to gain a controlling terminal.  We always turn on O_NOFOLLOW
+ * for reasons described elsewhere.
+ */
+static int
+fs_oflags_dotu(int mode, int *aflags)
+{
+	int flags;
+#define	CONVERT(theirs, ours) \
+	do { \
+		if (mode & (theirs)) { \
+			mode &= ~(theirs); \
+			flags |= ours; \
+		} \
+	} while (0)
+
+	switch (mode & L9P_OACCMODE) {
+
+	case L9P_OREAD:
+	default:
+		flags = O_RDONLY;
+		break;
+
+	case L9P_OWRITE:
+		flags = O_WRONLY;
+		break;
+
+	case L9P_ORDWR:
+		flags = O_RDWR;
+		break;
+
+	case L9P_OEXEC:
+		if (mode & L9P_OTRUNC)
+			return (EINVAL);
+		flags = O_RDONLY;
+		break;
+	}
+
+	flags |= O_NOCTTY | O_NOFOLLOW;
+
+	CONVERT(L9P_OTRUNC, O_TRUNC);
+
+	/*
+	 * Now take away some flags locally:
+	 *   the access mode (already translated)
+	 *   ORCLOSE - caller only
+	 *   OCEXEC - makes no sense in server
+	 *   ODIRECT - not applicable here
+	 * If there are any flag bits left after this,
+	 * we were unable to translate them.  For now, let's
+	 * treat this as EINVAL so that we can catch problems.
+	 */
+	mode &= ~(L9P_OACCMODE | L9P_ORCLOSE | L9P_OCEXEC | L9P_ODIRECT);
+	if (mode != 0) {
+		L9P_LOG(L9P_INFO,
+		    "fs_oflags_dotu: untranslated bits: %#x",
+		    (unsigned)mode);
+		return (EINVAL);
+	}
+
+	*aflags = flags;
+	return (0);
+#undef CONVERT
+}
+
+/*
+ * Convert from 9P2000.L (Linux) open mode bits to O_* flags.
+ * See fs_oflags_dotu above.
+ *
+ * Linux currently does not have open-for-exec, but there is a
+ * proposal for it using O_PATH|O_NOFOLLOW, now handled here.
+ *
+ * We may eventually also set L9P_ORCLOSE for L_O_TMPFILE.
+ */
+static int
+fs_oflags_dotl(uint32_t l_mode, int *aflags, enum l9p_omode *ap9)
+{
+	int flags;
+	enum l9p_omode p9;
+#define	CLEAR(theirs)	l_mode &= ~(uint32_t)(theirs)
+#define	CONVERT(theirs, ours) \
+	do { \
+		if (l_mode & (theirs)) { \
+			CLEAR(theirs); \
+			flags |= ours; \
+		} \
+	} while (0)
+
+	/*
+	 * Linux O_RDONLY, O_WRONLY, O_RDWR (0,1,2) match BSD/MacOS.
+	 */
+	flags = l_mode & O_ACCMODE;
+	if (flags == 3)
+		return (EINVAL);
+	CLEAR(O_ACCMODE);
+
+	if ((l_mode & (L9P_L_O_PATH | L9P_L_O_NOFOLLOW)) ==
+		    (L9P_L_O_PATH | L9P_L_O_NOFOLLOW)) {
+		CLEAR(L9P_L_O_PATH | L9P_L_O_NOFOLLOW);
+		p9 = L9P_OEXEC;
+	} else {
+		/*
+		 * Slightly dirty, but same dirt, really, as
+		 * setting flags from l_mode & O_ACCMODE.
+		 */
+		p9 = (enum l9p_omode)flags;	/* slightly dirty */
+	}
+
+	/* turn L_O_TMPFILE into L9P_ORCLOSE in *p9? */
+	if (l_mode & L9P_L_O_TRUNC)
+		p9 |= L9P_OTRUNC;	/* but don't CLEAR yet */
+
+	flags |= O_NOCTTY | O_NOFOLLOW;
+
+	/*
+	 * L_O_CREAT seems to be noise, since we get separate open
+	 * and create.  But it is actually set sometimes.  We just
+	 * throw it out here; create ops must set it themselves and
+	 * open ops have no permissions bits and hence cannot create.
+	 *
+	 * L_O_EXCL does make sense on create ops, i.e., we can
+	 * take a create op with or without L_O_EXCL.  We pass that
+	 * through.
+	 */
+	CLEAR(L9P_L_O_CREAT);
+	CONVERT(L9P_L_O_EXCL, O_EXCL);
+	CONVERT(L9P_L_O_TRUNC, O_TRUNC);
+	CONVERT(L9P_L_O_DIRECTORY, O_DIRECTORY);
+	CONVERT(L9P_L_O_APPEND, O_APPEND);
+	CONVERT(L9P_L_O_NONBLOCK, O_NONBLOCK);
+
+	/*
+	 * Discard these as useless noise at our (server) end.
+	 * (NOATIME might be useful but we can only set it on a
+	 * per-mount basis.)
+	 */
+	CLEAR(L9P_L_O_CLOEXEC);
+	CLEAR(L9P_L_O_DIRECT);
+	CLEAR(L9P_L_O_DSYNC);
+	CLEAR(L9P_L_O_FASYNC);
+	CLEAR(L9P_L_O_LARGEFILE);
+	CLEAR(L9P_L_O_NOATIME);
+	CLEAR(L9P_L_O_NOCTTY);
+	CLEAR(L9P_L_O_NOFOLLOW);
+	CLEAR(L9P_L_O_SYNC);
+
+	if (l_mode != 0) {
+		L9P_LOG(L9P_INFO,
+		    "fs_oflags_dotl: untranslated bits: %#x",
+		    (unsigned)l_mode);
+		return (EINVAL);
+	}
+
+	*aflags = flags;
+	*ap9 = p9;
+	return (0);
+#undef CLEAR
+#undef CONVERT
+}
 
 /*
  * Build full name of file by appending given name to directory name.
@@ -284,7 +474,7 @@ generate_qid(struct stat *buf, struct l9p_qid *qid)
 }
 
 static bool
-check_access(struct stat *st, uid_t uid, int amode)
+check_access(struct stat *st, uid_t uid, enum l9p_omode omode)
 {
 	struct passwd *pwd;
 #ifdef __FreeBSD__	/* XXX need better way to determine this */
@@ -302,12 +492,17 @@ check_access(struct stat *st, uid_t uid, int amode)
 	 * This is a bit dirty (using the well known mode bits instead
 	 * of the S_I[RWX]{USR,GRP,OTH} macros), but lets us be very
 	 * efficient about it.
+	 *
+	 * Note that L9P_OTRUNC requires write access to the file.
+	 * (L9P_ORCLOSE requires write access to the parent directory,
+	 * but the caller must do that check.)
 	 */
-	switch (amode) {
+	switch (omode & L9P_OACCMODE) {
 	case L9P_ORDWR:
 		mask = 0600;
 		break;
 	case L9P_OREAD:
+	default:
 		mask = 0400;
 		break;
 	case L9P_OWRITE:
@@ -316,10 +511,9 @@ check_access(struct stat *st, uid_t uid, int amode)
 	case L9P_OEXEC:
 		mask = 0100;
 		break;
-	default:
-		/* probably should not even get here */
-		return (false);
 	}
+	if (omode & L9P_OTRUNC)
+		mask |= 0400;
 
 	/*
 	 * Normal Unix semantics are: apply user permissions first
@@ -621,6 +815,8 @@ fs_create(void *softc, struct l9p_request *req)
 	file = dir->lo_aux;
 	if (lstat(file->name, &st) != 0)
 		return (errno);
+	if (!S_ISDIR(st.st_mode))
+		return (ENOTDIR);
 	if (!check_access(&st, file->uid, L9P_OWRITE))
 		return (EPERM);
 
@@ -639,17 +835,25 @@ fs_create(void *softc, struct l9p_request *req)
 	else if (req->lr_req.tcreate.perm & L9P_DMDEVICE)
 		error = internal_mknod(req, newname, mode);
 	else {
+		enum l9p_omode p9;
+		int flags;
+
+		p9 = req->lr_req.tcreate.mode;
+		error = fs_oflags_dotu(p9, &flags);
+		if (error)
+			return (error);
 		/*
-		 * https://swtch.com/plan9port/man/man9/open.html
-		 * says that permissions are actually
+		 * https://swtch.com/plan9port/man/man9/open.html and
+		 * http://plan9.bell-labs.com/magic/man2html/5/open
+		 * both say that permissions are actually
 		 * perm & (~0666 | (dir.perm & 0666)).
 		 * This seems a bit restrictive; probably
 		 * there should be a control knob for this.
 		 */
 		mode &= (~0666 | st.st_mode) & 0666;
-		file->fd = open(newname,
-		    O_CREAT | O_TRUNC | O_NOFOLLOW | req->lr_req.tcreate.mode,
-		    mode);
+
+		/* Create is always exclusive so O_TRUNC is irrelevant. */
+		file->fd = open(newname, flags | O_CREAT | O_EXCL, mode);
 		if (file->fd < 0)
 			error = errno;
 	}
@@ -679,6 +883,8 @@ fs_open(void *softc __unused, struct l9p_request *req)
 	struct l9p_connection *conn = req->lr_conn;
 	struct openfile *file = req->lr_fid->lo_aux;
 	struct stat st;
+	enum l9p_omode p9;
+	int error, flags;
 
 	assert(file != NULL);
 
@@ -693,7 +899,12 @@ fs_open(void *softc __unused, struct l9p_request *req)
 	if (S_ISLNK(st.st_mode))
 		return (EPERM);
 
-	if (!check_access(&st, file->uid, req->lr_req.topen.mode))
+	p9 = req->lr_req.topen.mode;
+	error = fs_oflags_dotu(p9, &flags);
+	if (error)
+		return (error);
+
+	if (!check_access(&st, file->uid, p9))
 		return (EPERM);
 
 	if (S_ISDIR(st.st_mode)) {
@@ -701,8 +912,7 @@ fs_open(void *softc __unused, struct l9p_request *req)
 		if (file->dir == NULL)
 			return (EPERM);	/* ??? */
 	} else {
-		file->fd = open(file->name,
-		    req->lr_req.topen.mode | O_NOFOLLOW);
+		file->fd = open(file->name, flags);
 		if (file->fd < 0)
 			return (EPERM);
 	}
@@ -1191,142 +1401,72 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	return (0);
 }
 
-/* XXX - this will be improved in a later change */
-#define	LO_LC_FORBID	((uint32_t)0xfffffffc & ~(uint32_t)(L9P_L_O_CREAT | \
-					L9P_L_O_EXCL | \
-					L9P_L_O_TRUNC | \
-					L9P_L_O_APPEND | \
-					L9P_L_O_NOFOLLOW | \
-					L9P_L_O_DIRECTORY | \
-					L9P_L_O_LARGEFILE | \
-					L9P_L_O_NONBLOCK | \
-					L9P_L_O_NOCTTY))
-
-/*
- * Common code for LOPEN and LCREATE requests.
- *
- * Note that the fid represents the containing directory for
- * LCREATE, and the file for LOPEN.  The newname argument is NULL
- * for LOPEN (and the mode and gid are 0).
- */
-static int
-fs_lo_lc(struct fs_softc *sc, struct l9p_request *req,
-	char *newname, uint32_t lflags, uint32_t mode, uint32_t gid,
-	struct stat *stp)
-{
-	struct openfile *file = req->lr_fid->lo_aux;
-	int oflags, oacc;
-	int resultfd;
-
-	assert(file != NULL);
-
-	/* low order bits match BSD; convert to L9P */
-	switch (lflags & O_ACCMODE) {
-	case O_RDONLY:
-		oacc = L9P_OREAD;
-		break;
-	case O_WRONLY:
-		oacc = L9P_OWRITE;
-		break;
-	case O_RDWR:
-		oacc = L9P_ORDWR;
-		break;
-	default:
-		return (EINVAL);
-	}
-
-	if (sc->fs_readonly && (newname || oacc != L9P_OREAD))
-		return (EROFS);
-
-	if (lflags & LO_LC_FORBID)
-		return (EOPNOTSUPP);
-
-	/*
-	 * What if anything should we do with O_NONBLOCK and O_NOCTTY?
-	 * (Currently we ignore it.)
-	 */
-	oflags = lflags & O_ACCMODE;
-	if (lflags & L9P_L_O_CREAT)
-		oflags |= O_CREAT;
-	if (lflags & L9P_L_O_EXCL)
-		oflags |= O_EXCL;
-	if (lflags & L9P_L_O_TRUNC)
-		oflags |= O_TRUNC;
-	if (lflags & L9P_L_O_DIRECTORY)
-		oflags |= O_DIRECTORY;
-	if (lflags & L9P_L_O_APPEND)
-		oflags |= O_APPEND;
-
-	oflags |= O_NOFOLLOW;
-
-	if (newname == NULL) {
-		/* open: require access, including write if O_TRUNC */
-		if (lstat(file->name, stp) != 0)
-			return (errno);
-		if ((lflags & L9P_L_O_TRUNC) && oacc == L9P_OREAD)
-			oacc = L9P_ORDWR;
-		if (!check_access(stp, file->uid, oacc))
-			return (EPERM);
-		/* Cancel O_CREAT|O_EXCL since we are not creating. */
-		oflags &= ~(O_CREAT | O_EXCL);
-		if (S_ISDIR(stp->st_mode)) {
-			/* Should we refuse if not O_DIRECTORY? */
-			file->dir = opendir(file->name);
-			if (file->dir == NULL)
-				return (errno);
-			resultfd = dirfd(file->dir);
-		} else {
-			file->fd = open(file->name, oflags);
-			if (file->fd < 0)
-				return (errno);
-			resultfd = file->fd;
-		}
-	} else {
-		/*
-		 * XXX racy, see fs_create.
-		 * Note, file->name is testing the containing dir,
-		 * not the file itself (so O_CREAT is still OK).
-		 */
-		if (lstat(file->name, stp) != 0)
-			return (errno);
-		if (!check_access(stp, file->uid, L9P_OWRITE))
-			return (EPERM);
-		file->fd = open(newname, oflags, mode);
-		if (file->fd < 0)
-			return (errno);
-		if (fchown(file->fd, file->uid, gid) != 0)
-			return (errno);
-		resultfd = file->fd;
-	}
-
-	if (fstat(resultfd, stp) != 0)
-		return (errno);
-
-	return (0);
-}
-
 static int
 fs_lopen(void *softc, struct l9p_request *req)
 {
+	struct fs_softc *sc = softc;
+	struct openfile *file;
 	struct stat st;
-	int error;
+	enum l9p_omode p9;
+	char *name;
+	int error, fd, flags;
 
-	error = fs_lo_lc(softc, req, NULL, req->lr_req.tlopen.flags, 0, 0, &st);
-	if (error == 0) {
-		generate_qid(&st, &req->lr_resp.rlopen.qid);
-		req->lr_resp.rlopen.iounit = req->lr_conn->lc_max_io_size;
+	file = req->lr_fid->lo_aux;
+	assert(file != NULL);
+
+	error = fs_oflags_dotl(req->lr_req.tlopen.flags, &flags, &p9);
+	if (error)
+		return (error);
+
+	if (sc->fs_readonly) {
+		if ((flags & O_TRUNC) != 0)
+			return (EROFS);
+		if ((flags & O_ACCMODE) != O_RDONLY)
+			return (EROFS);
 	}
-	return (error);
+
+	/*
+	 * Now very similar to fs_open; we should share code.
+	 */
+	name = file->name;
+	if (lstat(name, &st) != 0)
+		return (errno);
+	if (S_ISLNK(st.st_mode))
+		return (EPERM);
+	if (!check_access(&st, file->uid, p9))
+		return (EPERM);
+
+	if (S_ISDIR(st.st_mode)) {
+		file->dir = opendir(name);
+		if (file->dir == NULL)
+			return (errno);
+		fd = dirfd(file->dir);
+	} else {
+		fd = open(file->name, flags);
+		if (fd < 0)
+			return (errno);
+		file->fd = fd;
+	}
+
+	generate_qid(&st, &req->lr_resp.rlopen.qid);
+	req->lr_resp.rlopen.iounit = req->lr_conn->lc_max_io_size;
+	return (0);
 }
 
 static int
 fs_lcreate(void *softc, struct l9p_request *req)
 {
+	struct fs_softc *sc = softc;
+	struct openfile *file;
 	struct l9p_fid *dir;
 	struct stat st;
+	enum l9p_omode p9;
 	char *name;
 	char newname[MAXPATHLEN];
-	int error;
+	int error, fd, flags;
+
+	if (sc->fs_readonly)
+		return (EROFS);
 
 	dir = req->lr_fid;
 	name = req->lr_req.tlcreate.name;
@@ -1334,14 +1474,35 @@ fs_lcreate(void *softc, struct l9p_request *req)
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
-	error = fs_lo_lc(softc, req, newname,
-	    req->lr_req.tlcreate.flags, req->lr_req.tlcreate.mode,
-	    req->lr_req.tlcreate.gid, &st);
-	if (error == 0) {
-		generate_qid(&st, &req->lr_resp.rlcreate.qid);
-		req->lr_resp.rlcreate.iounit = req->lr_conn->lc_max_io_size;
-	}
-	return (error);
+
+	error = fs_oflags_dotl(req->lr_req.tlcreate.flags, &flags, &p9);
+	if (error)
+		return (error);
+
+	/*
+	 * XXX racy, see fs_create.
+	 * Note, file->name is testing the containing dir,
+	 * not the file itself.
+	 */
+	file = dir->lo_aux;
+	if (lstat(file->name, &st) != 0)
+		return (errno);
+	if (!S_ISDIR(st.st_mode))
+		return (ENOTDIR);
+	if (!check_access(&st, file->uid, L9P_OWRITE))
+		return (EPERM);
+	fd = open(newname, flags | O_CREAT | O_EXCL, req->lr_req.tlcreate.mode);
+	if (fd < 0)
+		return (errno);
+	file->fd = fd;
+	if (fchown(fd, file->uid, req->lr_req.tlcreate.gid) != 0)
+		return (errno);
+	if (fstat(fd, &st) != 0)
+		return (errno);
+
+	generate_qid(&st, &req->lr_resp.rlcreate.qid);
+	req->lr_resp.rlcreate.iounit = req->lr_conn->lc_max_io_size;
+	return (0);
 }
 
 /*

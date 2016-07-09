@@ -193,6 +193,7 @@ enum {
 /*
  * Open/create mode bits in 9P2000 and 9P2000.u operations
  * (not Linux lopen and lcreate flags, which are different).
+ * Note that the mode field is only one byte wide.
  */
 enum l9p_omode {
 	L9P_OREAD = 0,	/* open for read */
@@ -204,10 +205,6 @@ enum l9p_omode {
 	L9P_OCEXEC = 32,	/* or'ed in, close on exec */
 	L9P_ORCLOSE = 64,	/* or'ed in, remove on close */
 	L9P_ODIRECT = 128,	/* or'ed in, direct access */
-	L9P_ONONBLOCK = 256,	/* or'ed in, non-blocking call */
-	L9P_OEXCL = 0x1000,	/* or'ed in, exclusive use (create only) */
-	L9P_OLOCK = 0x2000,	/* or'ed in, lock after opening */
-	L9P_OAPPEND = 0x4000	/* or'ed in, append only */
 };
 
 /*

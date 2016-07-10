@@ -877,49 +877,117 @@ fs_flush(void *softc __unused, struct l9p_request *req __unused)
 	return (0);
 }
 
+/*
+ * Internal form of open: stat file and verify permissions (from p9
+ * argument), then open the file-or-directory, leaving the internal
+ * openfile fields set up.  If we cannot open the file, return a
+ * suitable error number, and leave everything unchanged.
+ *
+ * To mitigate the race between permissions testing and the actual
+ * open, we can stat the file twice (once with lstat() before open,
+ * then with fstat() after).  We assume O_NOFOLLOW is set in flags,
+ * so if some other race-winner substitutes in a symlink we won't
+ * open it here.  (However, embedded symlinks, if they occur, are
+ * still an issue.  Ideally we would like to have an O_NEVERFOLLOW
+ * that fails on embedded symlinks, and a way to pass this to
+ * lstat() as well.)
+ *
+ * When we use opendir() we cannot pass O_NOFOLLOW, so we must rely
+ * on substitution-detection via fstat().  To simplify the code we
+ * just always re-check.
+ *
+ * (For a proper fix in the future, we can require openat(), keep
+ * each parent directory open during walk etc, and allow only final
+ * name components with O_NOFOLLOW.)
+ *
+ * On successful return, st has been filled in.
+ */
 static int
-fs_open(void *softc __unused, struct l9p_request *req)
+fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
+    struct stat *stp)
 {
-	struct l9p_connection *conn = req->lr_conn;
-	struct openfile *file = req->lr_fid->lo_aux;
+	struct fs_softc *sc = softc;
+	struct openfile *file;
+	struct stat first;
+	char *name;
+	int fd;
+	DIR *dirp;
+
+	/* Forbid write ops on read-only file system. */
+	if (sc->fs_readonly) {
+		if ((flags & O_TRUNC) != 0)
+			return (EROFS);
+		if ((flags & O_ACCMODE) != O_RDONLY)
+			return (EROFS);
+		if (p9 & L9P_ORCLOSE)
+			return (EROFS);
+	}
+
+	file = fid->lo_aux;
+	assert(file != NULL);
+	name = file->name;
+
+	if (lstat(name, &first) != 0)
+		return (errno);
+	if (S_ISLNK(first.st_mode))
+		return (EPERM);
+	if (!check_access(&first, file->uid, p9))
+		return (EPERM);
+
+	if (S_ISDIR(first.st_mode)) {
+		/* Forbid write or truncate on directory. */
+		if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC))
+			return (EPERM);
+		dirp = opendir(name);
+		if (dirp == NULL)
+			return (EPERM);
+		fd = dirfd(dirp);
+	} else {
+		dirp = NULL;
+		fd = open(name, flags);
+		if (fd < 0)
+			return (EPERM);
+	}
+
+	/*
+	 * We have a valid fd, and maybe non-null dirp.  Re-check
+	 * the file, and fail if st_dev or st_ino changed.
+	 */
+	if (fstat(fd, stp) != 0 ||
+	    first.st_dev != stp->st_dev ||
+	    first.st_ino != stp->st_ino) {
+		if (dirp != NULL)
+			(void) closedir(dirp);
+		else
+			(void) close(fd);
+		return (EPERM);
+	}
+	if (dirp != NULL)
+		file->dir = dirp;
+	else
+		file->fd = fd;
+	return (0);
+}
+
+static int
+fs_open(void *softc, struct l9p_request *req)
+{
+	struct l9p_fid *fid = req->lr_fid;
 	struct stat st;
 	enum l9p_omode p9;
 	int error, flags;
-
-	assert(file != NULL);
-
-	/*
-	 * Caller should never be opening a symlink, as it
-	 * should have been resolved by this point.  (For the
-	 * 9P2000 protocol, we probably should deny -- at
-	 * the higher level -- that symlinks even exist.)
-	 */
-	if (lstat(file->name, &st) != 0)
-		return (errno);
-	if (S_ISLNK(st.st_mode))
-		return (EPERM);
 
 	p9 = req->lr_req.topen.mode;
 	error = fs_oflags_dotu(p9, &flags);
 	if (error)
 		return (error);
 
-	if (!check_access(&st, file->uid, p9))
-		return (EPERM);
-
-	if (S_ISDIR(st.st_mode)) {
-		file->dir = opendir(file->name);
-		if (file->dir == NULL)
-			return (EPERM);	/* ??? */
-	} else {
-		file->fd = open(file->name, flags);
-		if (file->fd < 0)
-			return (EPERM);
-	}
+	error = fs_iopen(softc, fid, flags, p9, &st);
+	if (error)
+		return (error);
 
 	generate_qid(&st, &req->lr_resp.ropen.qid);
-
-	req->lr_resp.ropen.iounit = conn->lc_max_io_size;
+	req->lr_resp.ropen.iounit = req->lr_conn->lc_max_io_size;
 	return (0);
 }
 
@@ -1404,49 +1472,18 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 static int
 fs_lopen(void *softc, struct l9p_request *req)
 {
-	struct fs_softc *sc = softc;
-	struct openfile *file;
+	struct l9p_fid *fid = req->lr_fid;
 	struct stat st;
 	enum l9p_omode p9;
-	char *name;
-	int error, fd, flags;
-
-	file = req->lr_fid->lo_aux;
-	assert(file != NULL);
+	int error, flags;
 
 	error = fs_oflags_dotl(req->lr_req.tlopen.flags, &flags, &p9);
 	if (error)
 		return (error);
 
-	if (sc->fs_readonly) {
-		if ((flags & O_TRUNC) != 0)
-			return (EROFS);
-		if ((flags & O_ACCMODE) != O_RDONLY)
-			return (EROFS);
-	}
-
-	/*
-	 * Now very similar to fs_open; we should share code.
-	 */
-	name = file->name;
-	if (lstat(name, &st) != 0)
-		return (errno);
-	if (S_ISLNK(st.st_mode))
-		return (EPERM);
-	if (!check_access(&st, file->uid, p9))
-		return (EPERM);
-
-	if (S_ISDIR(st.st_mode)) {
-		file->dir = opendir(name);
-		if (file->dir == NULL)
-			return (errno);
-		fd = dirfd(file->dir);
-	} else {
-		fd = open(file->name, flags);
-		if (fd < 0)
-			return (errno);
-		file->fd = fd;
-	}
+	error = fs_iopen(softc, fid, flags, p9, &st);
+	if (error)
+		return (error);
 
 	generate_qid(&st, &req->lr_resp.rlopen.qid);
 	req->lr_resp.rlopen.iounit = req->lr_conn->lc_max_io_size;

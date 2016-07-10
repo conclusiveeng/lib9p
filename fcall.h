@@ -269,9 +269,9 @@ struct l9p_stat {
 	char *gid;
 	char *muid;
 	char *extension;
-	uid_t n_uid;
-	gid_t n_gid;
-	uid_t n_muid;
+	uint32_t n_uid;
+	uint32_t n_gid;
+	uint32_t n_muid;
 };
 
 struct l9p_statfs {
@@ -319,8 +319,10 @@ struct l9p_f_attach {
 	uint32_t afid;
 	char *uname;
 	char *aname;
-	uid_t n_uname;
+	uint32_t n_uname;
 };
+#define	L9P_NOFID ((uint32_t)-1)	/* in Tattach, no auth fid */
+#define	L9P_NONUNAME ((uint32_t)-1)	/* in Tattach, no n_uname */
 
 struct l9p_f_tcreate {
 	struct l9p_hdr hdr;

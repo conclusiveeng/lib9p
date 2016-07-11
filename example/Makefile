@@ -1,10 +1,11 @@
-PROG=	server
-SRCS=	server.c
+PROGS=	server client
+server_SRCS=	server.c
+client_SRCS=	client.c
 MAN=
 
 CFLAGS=	-pthread -g -O0
 
-LDFLAGS=-L..
-LDADD=	-lsbuf -l9p
+LDFLAGS=-L.. -static
+LDADD=	-l9p -lsbuf
 
-.include <bsd.prog.mk>
+.include <bsd.progs.mk>

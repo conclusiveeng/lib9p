@@ -120,6 +120,14 @@ sbuf_done(struct sbuf *s)
 }
 
 void
+sbuf_clear(struct sbuf *s)
+{
+	s->s_buf[0] = 0;
+	s->s_position = 0;
+	s->s_size = 0;
+}
+
+void
 sbuf_delete(struct sbuf *s)
 {
 	free(s->s_buf);

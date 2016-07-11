@@ -73,6 +73,13 @@ l9p_realloc(void *ptr, size_t newsize)
 
 	return (r);
 }
+
+static inline void
+l9p_free(void *ptr)
+{
+	free(ptr);
+}
+
 #endif /* _KERNEL */
 
 #endif /* LIB9P_LIB9P_IMPL_H */

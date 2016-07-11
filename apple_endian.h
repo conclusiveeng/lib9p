@@ -24,4 +24,10 @@
 # define htobe32(x)	OSSwapHostToBigInt32(x)
 # define be32toh(x)	OSSwapBigToHostInt32(x)
 
+# define htole16(x)	OSSwapHostToLittleInt16(x)
+# define le16toh(x)	OSSwapLittleToHostInt16(x)
+
+# define htole64(x)	OSSwapHostToLittleInt64(x)
+# define le64toh(x)	OSSwapLittleToHostInt64(x)
+
 #endif /* _APPLE_ENDIAN_H */

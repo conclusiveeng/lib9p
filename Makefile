@@ -7,7 +7,8 @@ SRCS=		pack.c \
 		utils.c \
 		rfuncs.c \
 		transport/socket.c \
-		backend/fs.c
+		backend/fs.c \
+		client.c
 
 INCS=		lib9p.h
 CC=clang

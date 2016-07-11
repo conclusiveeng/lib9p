@@ -18,6 +18,9 @@ WFLAGS += -Wno-format-nonliteral
 WFLAGS += -Wno-unused-macros
 WFLAGS += -Wno-disabled-macro-expansion
 WFLAGS += -Werror
+WFLAGS += -Wno-unreachable-code -Wno-unreachable-code-break
+WFLAGS += -Wno-int-to-void-pointer-cast
+WFLAGS += -Wno-switch-enum
 endif
 
 ifeq ($(shell test $(CC_VERSION) -gt 600; echo $$?),0)
@@ -40,18 +43,24 @@ LIB_SRCS := \
 	rfuncs.c \
 	sbuf/sbuf.c \
 	transport/socket.c \
-	backend/fs.c
+	backend/fs.c \
+	client.c
 
 SERVER_SRCS := \
 	example/server.c
 
+CLIENT_SRCS := \
+	example/client.c
+
 BUILD_DIR := build
 LIB_OBJS := $(addprefix build/,$(LIB_SRCS:.c=.o))
 SERVER_OBJS := $(SERVER_SRCS:.c=.o)
+CLIENT_OBJS := $(CLIENT_SRCS:.c=.o)
 LIB := lib9p.dylib
 SERVER := server
+CLIENT := client
 
-all: build $(LIB) $(SERVER)
+all: build $(LIB) $(SERVER) $(CLIENT)
 
 $(LIB): $(LIB_OBJS)
 	cc -dynamiclib $^ -o build/$@
@@ -59,9 +68,12 @@ $(LIB): $(LIB_OBJS)
 $(SERVER): $(SERVER_OBJS) $(LIB)
 	cc $< -o build/$(SERVER) -Lbuild/ -l9p
 
+$(CLIENT): $(CLIENT_OBJS) $(LIB)
+	cc $< -o build/$(CLIENT) -Lbuild/ -l9p
+
 clean:
 	rm -rf build
-	rm -f $(SERVER_OBJS)
+	rm -f $(SERVER_OBJS) $(CLIENT_OBJS)
 build:
 	mkdir build
 	mkdir build/sbuf

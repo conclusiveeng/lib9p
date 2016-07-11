@@ -124,9 +124,12 @@ get_socket(char *host, char *port)
 {
 	struct addrinfo *ai, *res, hints = { .ai_family = PF_UNSPEC, .ai_socktype = SOCK_STREAM, };
 	int retval = -1;
+	int error;
 
-	if (getaddrinfo(host, port, &hints, &ai) == -1)
+	if ((error = getaddrinfo(host, port, &hints, &ai)) != 0) {
+		warnx("Could not resolve %s:%s: %s", host, port, gai_strerror(error));
 		return (-1);
+	}
 
 	for (res = ai; res; res = res->ai_next) {
 		int val = 1;
@@ -167,7 +170,9 @@ socket_connection_init(struct l9p_client_connection *conn, char *host, char *por
 	conn->tags = (void*)0;
 
 	ctx->s = get_socket(host, port);
-	return 1;
+	if (ctx->s == -1)
+		return -1;
+	return 0;
 
 }
 

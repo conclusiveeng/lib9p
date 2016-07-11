@@ -49,6 +49,50 @@ struct socket_connection {
 	int s;
 };
 
+static uint16_t
+default_get_tag(struct l9p_client_connection *conn)
+{
+	uint16_t current = (uint16_t)(conn->tags);
+
+	current++;
+	conn->tags = (void*)current;
+	return current;
+}
+
+static void
+default_release_tag(struct l9p_client_connection *conn, uint16_t tag)
+{
+	uint16_t current = (uint16_t)(conn->tags);
+
+	// This would be bad if we had a tag leak
+	if (tag == current) {
+		current--;
+		conn->tags = (void*)current;
+	}
+}
+
+static uint32_t
+default_get_fid(struct l9p_client_connection *conn)
+{
+	uint32_t current = (uint32_t)(conn->fids);
+
+	current++;
+	conn->fids = (void*)current;
+	return current;
+}
+
+static void
+default_release_fid(struct l9p_client_connection *conn, uint32_t fid)
+{
+	uint32_t current = (uint32_t)(conn->fids);
+
+	// This would be bad if we had a tag leak
+	if (fid == current) {
+		current--;
+		conn->fids = (void*)current;
+	}
+}
+
 static int
 socket_send(struct l9p_client_connection *conn, struct iovec *iov)
 {
@@ -108,8 +152,9 @@ socket_recv(struct l9p_client_connection *conn, uint16_t tag, union l9p_fcall **
 
 	l9p_free(msg_buffer);
 	*response = tfcp;
+	// This part should probably go in a common function
 	if (tag != NOTAG)
-		release_tag(conn, (*response)->hdr.tag);
+		conn->release_tag(conn, (*response)->hdr.tag);
 	if (error == 0) {
 		if ((*response)->hdr.tag != tag) {
 			warnx("Tag is out of sync, dropping buffer (%#x vs %#x)", (*response)->hdr.tag, tag);
@@ -166,6 +211,11 @@ socket_connection_init(struct l9p_client_connection *conn, char *host, char *por
 	conn->lc_version = L9P_2000;
 	conn->send_msg = socket_send;
 	conn->recv_msg = socket_recv;
+	conn->get_tag = default_get_tag;
+	conn->release_tag = default_release_tag;
+	conn->get_fid = default_get_fid;
+	conn->release_fid = default_release_fid;
+
 	conn->fids = (void*)0;
 	conn->tags = (void*)0;
 
@@ -212,7 +262,7 @@ talk(struct l9p_client_connection *conn, union l9p_fcall *transmit, union l9p_fc
 		goto done;
 	
 	error = conn->recv_msg(conn, tag, response);
-	release_tag(conn, tag);
+	//conn->release_tag(conn, tag);
 	if (error)
 		goto done;
 
@@ -295,7 +345,7 @@ main(int ac, char *av[])
 		l9p_freefcall(fcp);
 		l9p_free(fcp);
 
-		conn.root_fid = get_fid(&conn);
+		conn.root_fid = conn.get_fid(&conn);
 #if 0
 		rv = p9_msg(&conn, &fcall, L9P_TATTACH, &tag, conn.root_fid, NOFID, "sef", "", (uint32_t)geteuid());
 		if (rv) {
@@ -341,7 +391,7 @@ main(int ac, char *av[])
 		l9p_freefcall(fcp);
 		l9p_free(fcp);
 
-		uint32_t new_fid = get_fid(&conn);
+		uint32_t new_fid = conn.get_fid(&conn);
 
 #define TESTFILE "testfile"
 
@@ -393,7 +443,7 @@ main(int ac, char *av[])
 
 		l9p_freefcall(fcp);
 		l9p_free(fcp);
-		release_fid(&conn, new_fid);
+		conn.release_fid(&conn, new_fid);
 		sbuf_delete(sb);
 
 	}

@@ -20,51 +20,6 @@
 #include "lib9p_impl.h"
 #include "fcall.h"
 
-uint16_t
-get_tag(struct l9p_client_connection *conn)
-{
-	uint16_t current = (uint16_t)(conn->tags);
-
-	current++;
-	conn->tags = (void*)current;
-	return current;
-}
-
-void
-release_tag(struct l9p_client_connection *conn, uint16_t tag)
-{
-	uint16_t current = (uint16_t)(conn->tags);
-
-	// This would be bad if we had a tag leak
-	if (tag == current) {
-		current--;
-		conn->tags = (void*)current;
-	}
-}
-
-uint32_t
-get_fid(struct l9p_client_connection *conn)
-{
-	uint32_t current = (uint32_t)(conn->fids);
-
-	current++;
-	conn->fids = (void*)current;
-	return current;
-}
-
-void
-release_fid(struct l9p_client_connection *conn, uint32_t fid)
-{
-	uint32_t current = (uint32_t)(conn->fids);
-
-	// This would be bad if we had a tag leak
-	if (fid == current) {
-		current--;
-		conn->fids = (void*)current;
-	}
-}
-
-
 /*
  * Pack the fcall into msg.
  */
@@ -133,7 +88,7 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 	 * change.
 	 */
 	if (type != L9P_TVERSION) {
-		*tagp = get_tag(conn);
+		*tagp = conn->get_tag(conn);
 		fcallp->hdr.type = type;
 		fcallp->hdr.tag = *tagp;
 		fcallp->hdr.fid = va_arg(ap, uint32_t);

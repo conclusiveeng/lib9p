@@ -100,7 +100,7 @@ static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
 static struct openfile *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
-static bool check_access(struct stat *, uid_t, enum l9p_omode);
+static bool check_access(struct stat *, uid_t, gid_t, enum l9p_omode);
 static void generate_qid(struct stat *, struct l9p_qid *);
 
 /*
@@ -474,9 +474,9 @@ generate_qid(struct stat *buf, struct l9p_qid *qid)
 }
 
 static bool
-check_access(struct stat *st, uid_t uid, enum l9p_omode omode)
+check_access(struct stat *st, uid_t uid, gid_t gid, enum l9p_omode omode)
 {
-	struct passwd *pwd;
+	struct passwd *pwd = NULL;
 #ifdef __FreeBSD__	/* XXX need better way to determine this */
 	gid_t groups[NGROUPS_MAX];
 #else
@@ -536,7 +536,25 @@ check_access(struct stat *st, uid_t uid, enum l9p_omode omode)
 	/* Check for group access - XXX: not thread safe */
 	mask <<= 3;
 	pwd = getpwuid(uid);
-	getgrouplist(pwd->pw_name, (int)pwd->pw_gid, groups, &ngroups);
+
+	if (pwd != NULL && gid == (gid_t)-1)
+		/* Passed-in gid (if any) takes precedence */
+		gid = pwd->pw_gid;
+
+	if (pwd == NULL && gid == (gid_t)-1)
+		/*
+		 * At this point we don't know know the gid and we can't
+		 * look it up - refusing access is all we can do.
+		 */
+		return (false);
+
+	if (pwd != NULL)
+		getgrouplist(pwd->pw_name, (int)gid, groups, &ngroups);
+	else {
+		/* Use passed-in gid (guaranteed to be valid at this point) */
+		ngroups = 1;
+		groups[0] = (int)gid;
+	}
 
 	for (i = 0; i < ngroups; i++) {
 		if (st->st_gid == (gid_t)groups[i]) {
@@ -817,7 +835,7 @@ fs_create(void *softc, struct l9p_request *req)
 		return (errno);
 	if (!S_ISDIR(st.st_mode))
 		return (ENOTDIR);
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
 		return (EPERM);
 
 	mode = req->lr_req.tcreate.perm & 0777;
@@ -931,7 +949,7 @@ fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
 		return (errno);
 	if (S_ISLNK(first.st_mode))
 		return (EPERM);
-	if (!check_access(&first, file->uid, p9))
+	if (!check_access(&first, file->uid, file->gid, p9))
 		return (EPERM);
 
 	if (S_ISDIR(first.st_mode)) {
@@ -1101,7 +1119,7 @@ fs_remove(void *softc, struct l9p_request *req)
 	if (lstat(file->name, &st) != 0)
 		return (errno);
 
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
 		return (EPERM);
 
 	if (S_ISDIR(st.st_mode)) {
@@ -1199,7 +1217,7 @@ fs_walk(void *softc, struct l9p_request *req)
 			error = ENOTDIR;
 			goto out;
 		}
-		if (!check_access(&st, file->uid, L9P_OEXEC)) {
+		if (!check_access(&st, file->uid, file->gid, L9P_OEXEC)) {
 			L9P_LOG(L9P_DEBUG,
 			    "Twalk: denying dir-walk on \"%s\" for uid %u",
 			    succ, (unsigned)file->uid);
@@ -1454,7 +1472,7 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	if (lstat(file->name, &st) != 0)
 		return (errno);
 
-	if (!check_access(&st, file->uid, L9P_OREAD))
+	if (!check_access(&st, file->uid, file->gid, L9P_OREAD))
 		return (EPERM);
 
 	if (statfs(file->name, &f) != 0)
@@ -1526,7 +1544,7 @@ fs_lcreate(void *softc, struct l9p_request *req)
 		return (errno);
 	if (!S_ISDIR(st.st_mode))
 		return (ENOTDIR);
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, req->lr_req.tlcreate.gid, L9P_OWRITE))
 		return (EPERM);
 	fd = open(newname, flags | O_CREAT | O_EXCL, req->lr_req.tlcreate.mode);
 	if (fd < 0)
@@ -1569,7 +1587,7 @@ fs_symlink(void *softc, struct l9p_request *req)
 
 	if (lstat(file->name, &st) != 0)
 		return (errno);
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
 		return (EPERM);
 
 	error = internal_symlink(req->lr_req.tsymlink.symtgt, newname);
@@ -1612,7 +1630,7 @@ fs_mknod(void *softc, struct l9p_request *req)
 
 	if (lstat(file->name, &st) != 0)
 		return (errno);
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
 		return (EPERM);
 
 	mode = req->lr_req.tmknod.mode;
@@ -1682,7 +1700,7 @@ fs_rename(void *softc, struct l9p_request *req)
 		error = errno;
 		goto out;
 	}
-	if (!check_access(&st, file->uid, L9P_OWRITE)) {
+	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE)) {
 		error = EPERM;
 		goto out;
 	}
@@ -1691,7 +1709,7 @@ fs_rename(void *softc, struct l9p_request *req)
 			error = errno;
 			goto out;
 		}
-		if (!check_access(&st, f2->uid, L9P_OWRITE)) {
+		if (!check_access(&st, f2->uid, f2->gid, L9P_OWRITE)) {
 			error = EPERM;
 			goto out;
 		}
@@ -2078,7 +2096,7 @@ fs_link(void *softc, struct l9p_request *req)
 	/* Require write access to target directory. */
 	if (lstat(dirf->name, &st))
 		return (errno);
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
 		return (EPERM);
 
 	if (link(file->name, newname) != 0)
@@ -2111,7 +2129,7 @@ fs_mkdir(void *softc, struct l9p_request *req)
 	/* Require write access to target directory. */
 	if (lstat(file->name, &st))
 		return (errno);
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, req->lr_req.tmkdir.gid, L9P_OWRITE))
 		return (EPERM);
 
 	error = internal_mkdir(newname, (mode_t)req->lr_req.tmkdir.mode, &st);
@@ -2145,13 +2163,13 @@ fs_renameat(void *softc, struct l9p_request *req)
 	/* Require write access to both source and target directory. */
 	if (lstat(olddir->name, &st))
 		return (errno);
-	if (!check_access(&st, olddir->uid, L9P_OWRITE))
+	if (!check_access(&st, olddir->uid, olddir->gid, L9P_OWRITE))
 		return (EPERM);
 
 	if (olddir != newdir) {
 		if (lstat(newdir->name, &st))
 			return (errno);
-		if (!check_access(&st, newdir->uid, L9P_OWRITE))
+		if (!check_access(&st, newdir->uid, newdir->gid, L9P_OWRITE))
 			return (EPERM);
 	}
 
@@ -2196,7 +2214,7 @@ fs_unlinkat(void *softc, struct l9p_request *req)
 	/* Require write access to directory. */
 	if (lstat(file->name, &st))
 		return (errno);
-	if (!check_access(&st, file->uid, L9P_OWRITE))
+	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
 		return (EPERM);
 
 	if (req->lr_req.tunlinkat.flags & L9PL_AT_REMOVEDIR) {

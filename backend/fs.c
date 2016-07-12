@@ -83,12 +83,12 @@ struct fs_softc {
 	bool fs_readonly;
 };
 
-struct openfile {
-	DIR *dir;
-	int fd;
-	char *name;
-	uid_t uid;
-	gid_t gid;
+struct fs_fid {
+	DIR	*ff_dir;
+	int	ff_fd;
+	char	*ff_name;
+	uid_t	ff_uid;
+	gid_t	ff_gid;
 };
 
 /*
@@ -97,7 +97,7 @@ struct openfile {
 static int fs_buildname(struct l9p_fid *, char *, char *, size_t);
 static int fs_oflags_dotu(int, int *);
 static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
-static struct openfile *open_fid(const char *);
+static struct fs_fid *open_fid(const char *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
 static bool check_access(struct stat *, uid_t, gid_t, enum l9p_omode);
@@ -330,15 +330,15 @@ fs_oflags_dotl(uint32_t l_mode, int *aflags, enum l9p_omode *ap9)
 static int
 fs_buildname(struct l9p_fid *dir, char *name, char *buf, size_t size)
 {
-	struct openfile *dirf = dir->lo_aux;
+	struct fs_fid *dirf = dir->lo_aux;
 	size_t dlen, nlen1;
 
 	assert(dirf != NULL);
-	dlen = strlen(dirf->name);
+	dlen = strlen(dirf->ff_name);
 	nlen1 = strlen(name) + 1;	/* +1 for '\0' */
 	if (dlen + 1 + nlen1 > size)
 		return (ENAMETOOLONG);
-	memcpy(buf, dirf->name, dlen);
+	memcpy(buf, dirf->ff_name, dlen);
 	buf[dlen] = '/';
 	memcpy(buf + dlen + 1, name, nlen1);
 	return (0);
@@ -347,15 +347,15 @@ fs_buildname(struct l9p_fid *dir, char *name, char *buf, size_t size)
 /*
  * Allocate new open-file data structure to attach to a fid.
  */
-static struct openfile *
+static struct fs_fid *
 open_fid(const char *path)
 {
-	struct openfile *ret;
+	struct fs_fid *ret;
 
 	ret = l9p_calloc(1, sizeof(*ret));
-	ret->fd = -1;
-	ret->name = strdup(path);
-	if (ret->name == NULL) {
+	ret->ff_fd = -1;
+	ret->ff_name = strdup(path);
+	if (ret->ff_name == NULL) {
 		free(ret);
 		return (NULL);
 	}
@@ -570,7 +570,7 @@ static int
 fs_attach(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = (struct fs_softc *)softc;
-	struct openfile *file;
+	struct fs_fid *file;
 	struct passwd *pwd;
 	struct stat st;
 	uint32_t n_uname;
@@ -620,8 +620,8 @@ fs_attach(void *softc, struct l9p_request *req)
 	if (file == NULL)
 		return (ENOMEM);
 
-	file->uid = pwd != NULL ? pwd->pw_uid : uid;
-	file->gid = pwd != NULL ? pwd->pw_gid : (gid_t)-1;
+	file->ff_uid = pwd != NULL ? pwd->pw_uid : uid;
+	file->ff_gid = pwd != NULL ? pwd->pw_gid : (gid_t)-1;
 	req->lr_fid->lo_aux = file;
 	generate_qid(&st, &req->lr_resp.rattach.qid);
 	return (0);
@@ -630,17 +630,17 @@ fs_attach(void *softc, struct l9p_request *req)
 static int
 fs_clunk(void *softc __unused, struct l9p_request *req)
 {
-	struct openfile *file;
+	struct fs_fid *file;
 
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
 
-	if (file->dir) {
-		closedir(file->dir);
-		file->dir = NULL;
-	} else if (file->fd != -1) {
-		close(file->fd);
-		file->fd = -1;
+	if (file->ff_dir) {
+		closedir(file->ff_dir);
+		file->ff_dir = NULL;
+	} else if (file->ff_fd != -1) {
+		close(file->ff_fd);
+		file->ff_fd = -1;
 	}
 
 	return (0);
@@ -691,7 +691,7 @@ internal_mkfifo(char *newname, mode_t mode)
 
 
 static inline int
-internal_mksocket(struct openfile *file __unused, char *newname,
+internal_mksocket(struct fs_fid *file __unused, char *newname,
     char *reqname __unused)
 {
 	struct sockaddr_un sun;
@@ -805,7 +805,7 @@ static int
 fs_create(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
+	struct fs_fid *file;
 	struct l9p_fid *dir;
 	struct stat st;
 	mode_t mode;
@@ -834,11 +834,11 @@ fs_create(void *softc, struct l9p_request *req)
 	 * (after profiling).
 	 */
 	file = dir->lo_aux;
-	if (lstat(file->name, &st) != 0)
+	if (lstat(file->ff_name, &st) != 0)
 		return (errno);
 	if (!S_ISDIR(st.st_mode))
 		return (ENOTDIR);
-	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OWRITE))
 		return (EPERM);
 
 	mode = req->lr_req.tcreate.perm & 0777;
@@ -874,15 +874,15 @@ fs_create(void *softc, struct l9p_request *req)
 		mode &= (~0666 | st.st_mode) & 0666;
 
 		/* Create is always exclusive so O_TRUNC is irrelevant. */
-		file->fd = open(newname, flags | O_CREAT | O_EXCL, mode);
-		if (file->fd < 0)
+		file->ff_fd = open(newname, flags | O_CREAT | O_EXCL, mode);
+		if (file->ff_fd < 0)
 			error = errno;
 	}
 
 	if (error)
 		return (error);
 
-	if (lchown(newname, file->uid, file->gid) != 0 ||
+	if (lchown(newname, file->ff_uid, file->ff_gid) != 0 ||
 	    lstat(newname, &st) != 0)
 		return (errno);
 
@@ -901,7 +901,7 @@ fs_flush(void *softc __unused, struct l9p_request *req __unused)
 /*
  * Internal form of open: stat file and verify permissions (from p9
  * argument), then open the file-or-directory, leaving the internal
- * openfile fields set up.  If we cannot open the file, return a
+ * fs_fid fields set up.  If we cannot open the file, return a
  * suitable error number, and leave everything unchanged.
  *
  * To mitigate the race between permissions testing and the actual
@@ -928,7 +928,7 @@ fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
     struct stat *stp)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
+	struct fs_fid *file;
 	struct stat first;
 	char *name;
 	int fd;
@@ -946,13 +946,13 @@ fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
 
 	file = fid->lo_aux;
 	assert(file != NULL);
-	name = file->name;
+	name = file->ff_name;
 
 	if (lstat(name, &first) != 0)
 		return (errno);
 	if (S_ISLNK(first.st_mode))
 		return (EPERM);
-	if (!check_access(&first, file->uid, file->gid, p9))
+	if (!check_access(&first, file->ff_uid, file->ff_gid, p9))
 		return (EPERM);
 
 	if (S_ISDIR(first.st_mode)) {
@@ -984,9 +984,9 @@ fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
 		return (EPERM);
 	}
 	if (dirp != NULL)
-		file->dir = dirp;
+		file->ff_dir = dirp;
 	else
-		file->fd = fd;
+		file->ff_fd = fd;
 	return (0);
 }
 
@@ -1019,14 +1019,14 @@ fs_open(void *softc, struct l9p_request *req)
  * all systems do, so hide the ifdef-ed code in an inline function.
  */
 static inline int
-fs_lstatat(struct openfile *file, char *name, struct stat *st)
+fs_lstatat(struct fs_fid *file, char *name, struct stat *st)
 {
 #ifdef HAVE_FSTATAT
-	return (fstatat(dirfd(file->dir), name, st, AT_SYMLINK_NOFOLLOW));
+	return (fstatat(dirfd(file->ff_dir), name, st, AT_SYMLINK_NOFOLLOW));
 #else
 	char buf[MAXPATHLEN];
 
-	if (strlcpy(buf, file->name, sizeof(buf)) >= sizeof(buf) ||
+	if (strlcpy(buf, file->ff_name, sizeof(buf)) >= sizeof(buf) ||
 	    strlcat(buf, name, sizeof(buf)) >= sizeof(buf))
 		return (-1);
 	return (lstat(name, st));
@@ -1036,15 +1036,15 @@ fs_lstatat(struct openfile *file, char *name, struct stat *st)
 static int
 fs_read(void *softc __unused, struct l9p_request *req)
 {
-	struct openfile *file;
 	struct l9p_stat l9stat;
+	struct fs_fid *file;
 	bool dotu = req->lr_conn->lc_version >= L9P_2000U;
 	ssize_t ret;
 
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
 
-	if (file->dir != NULL) {
+	if (file->ff_dir != NULL) {
 		struct dirent *d;
 		struct stat st;
 		struct l9p_message msg;
@@ -1066,20 +1066,20 @@ fs_read(void *softc __unused, struct l9p_request *req)
 		 */
 		l9p_init_msg(&msg, req, L9P_PACK);
 		for (;;) {
-			o = telldir(file->dir);
-			d = readdir(file->dir);
+			o = telldir(file->ff_dir);
+			d = readdir(file->ff_dir);
 			if (d == NULL)
 				break;
 			if (fs_lstatat(file, d->d_name, &st))
 				continue;
 			dostat(&l9stat, d->d_name, &st, dotu);
 			if (l9p_pack_stat(&msg, req, &l9stat) != 0) {
-				seekdir(file->dir, o);
+				seekdir(file->ff_dir, o);
 				break;
 			}
 #if defined(__FreeBSD__)
-			seekdir(file->dir, o);
-			(void) readdir(file->dir);
+			seekdir(file->ff_dir, o);
+			(void) readdir(file->ff_dir);
 #endif
 		}
 	} else {
@@ -1087,14 +1087,14 @@ fs_read(void *softc __unused, struct l9p_request *req)
                     req->lr_data_niov, req->lr_req.io.count);
 
 #if defined(__FreeBSD__)
-		ret = preadv(file->fd, req->lr_data_iov, niov,
+		ret = preadv(file->ff_fd, req->lr_data_iov, niov,
 		    req->lr_req.io.offset);
 #else
 		/* XXX: not thread safe, should really use aio_listio. */
-		if (lseek(file->fd, (off_t)req->lr_req.io.offset, SEEK_SET) < 0)
+		if (lseek(file->ff_fd, (off_t)req->lr_req.io.offset, SEEK_SET) < 0)
 			return (errno);
 
-		ret = (uint32_t)readv(file->fd, req->lr_data_iov, (int)niov);
+		ret = (uint32_t)readv(file->ff_fd, req->lr_data_iov, (int)niov);
 #endif
 
 		if (ret < 0)
@@ -1110,7 +1110,7 @@ static int
 fs_remove(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
+	struct fs_fid *file;
 	struct stat st;
 
 	file = req->lr_fid->lo_aux;
@@ -1119,17 +1119,17 @@ fs_remove(void *softc, struct l9p_request *req)
 	if (sc->fs_readonly)
 		return (EROFS);
 
-	if (lstat(file->name, &st) != 0)
+	if (lstat(file->ff_name, &st) != 0)
 		return (errno);
 
-	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OWRITE))
 		return (EPERM);
 
 	if (S_ISDIR(st.st_mode)) {
-		if (rmdir(file->name) != 0)
+		if (rmdir(file->ff_name) != 0)
 			return (errno);
 	} else {
-		if (unlink(file->name) != 0)
+		if (unlink(file->ff_name) != 0)
 			return (errno);
 	}
 
@@ -1139,15 +1139,15 @@ fs_remove(void *softc, struct l9p_request *req)
 static int
 fs_stat(void *softc __unused, struct l9p_request *req)
 {
-	struct openfile *file;
+	struct fs_fid *file;
 	struct stat st;
 	bool dotu = req->lr_conn->lc_version >= L9P_2000U;
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	lstat(file->name, &st);
-	dostat(&req->lr_resp.rstat.stat, file->name, &st, dotu);
+	lstat(file->ff_name, &st);
+	dostat(&req->lr_resp.rstat.stat, file->ff_name, &st, dotu);
 
 	return (0);
 }
@@ -1156,9 +1156,9 @@ static int
 fs_walk(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
+	struct fs_fid *file = req->lr_fid->lo_aux;
+	struct fs_fid *newfile;
 	struct stat st;
-	struct openfile *file = req->lr_fid->lo_aux;
-	struct openfile *newfile;
 	size_t clen, namelen, need;
 	char *comp, *succ, *next, *swtmp;
 	bool atroot;
@@ -1199,7 +1199,7 @@ fs_walk(void *softc, struct l9p_request *req)
 	 */
 	succ = namebufs[0];
 	next = namebufs[1];
-	namelen = strlcpy(succ, file->name, MAXPATHLEN);
+	namelen = strlcpy(succ, file->ff_name, MAXPATHLEN);
 	if (namelen >= MAXPATHLEN)
 		return (ENAMETOOLONG);
 	if (lstat(succ, &st) < 0)
@@ -1220,10 +1220,10 @@ fs_walk(void *softc, struct l9p_request *req)
 			error = ENOTDIR;
 			goto out;
 		}
-		if (!check_access(&st, file->uid, file->gid, L9P_OEXEC)) {
+		if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OEXEC)) {
 			L9P_LOG(L9P_DEBUG,
 			    "Twalk: denying dir-walk on \"%s\" for uid %u",
-			    succ, (unsigned)file->uid);
+			    succ, (unsigned)file->ff_uid);
 			error = EPERM;
 			goto out;
 		}
@@ -1276,7 +1276,7 @@ fs_walk(void *softc, struct l9p_request *req)
 				error = ENAMETOOLONG;
 				break;
 			}
-			memcpy(next, file->name, namelen);
+			memcpy(next, file->ff_name, namelen);
 			next[namelen++] = '/';
 			memcpy(&next[namelen], comp, clen + 1);
 			namelen += clen;
@@ -1318,8 +1318,8 @@ fs_walk(void *softc, struct l9p_request *req)
 		error = ENOMEM;
 		goto out;
 	}
-	newfile->uid = file->uid;
-	newfile->gid = file->gid;
+	newfile->ff_uid = file->ff_uid;
+	newfile->ff_gid = file->ff_gid;
 	req->lr_newfid->lo_aux = newfile;
 	req->lr_resp.rwalk.nwqid = (uint16_t)i;
 out:
@@ -1330,7 +1330,7 @@ static int
 fs_write(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
+	struct fs_fid *file;
 	ssize_t ret;
 
 	file = req->lr_fid->lo_aux;
@@ -1343,14 +1343,14 @@ fs_write(void *softc, struct l9p_request *req)
             req->lr_data_niov, req->lr_req.io.count);
 
 #if defined(__FreeBSD__)
-	ret = pwritev(file->fd, req->lr_data_iov, niov,
+	ret = pwritev(file->ff_fd, req->lr_data_iov, niov,
 	    req->lr_req.io.offset);
 #else
 	/* XXX: not thread safe, should really use aio_listio. */
-	if (lseek(file->fd, (off_t)req->lr_req.io.offset, SEEK_SET) < 0)
+	if (lseek(file->ff_fd, (off_t)req->lr_req.io.offset, SEEK_SET) < 0)
 		return (errno);
 
-	ret = writev(file->fd, req->lr_data_iov,
+	ret = writev(file->ff_fd, req->lr_data_iov,
 	    (int)niov);
 #endif
 
@@ -1365,8 +1365,8 @@ static int
 fs_wstat(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
 	struct l9p_stat *l9stat = &req->lr_req.twstat.stat;
+	struct fs_fid *file;
 	int error = 0;
 
 	file = req->lr_fid->lo_aux;
@@ -1401,26 +1401,26 @@ fs_wstat(void *softc, struct l9p_request *req)
 	}
 
 	if (l9stat->length != (uint64_t)~0) {
-		if (file->dir != NULL) {
+		if (file->ff_dir != NULL) {
 			error = EINVAL;
 			goto out;
 		}
 
-		if (truncate(file->name, (off_t)l9stat->length) != 0) {
+		if (truncate(file->ff_name, (off_t)l9stat->length) != 0) {
 			error = errno;
 			goto out;
 		}
 	}
 
 	if (req->lr_conn->lc_version >= L9P_2000U) {
-		if (lchown(file->name, l9stat->n_uid, l9stat->n_gid) != 0) {
+		if (lchown(file->ff_name, l9stat->n_uid, l9stat->n_gid) != 0) {
 			error = errno;
 			goto out;
 		}
 	}
 
 	if (l9stat->mode != (uint32_t)~0) {
-		if (chmod(file->name, l9stat->mode & 0777) != 0) {
+		if (chmod(file->ff_name, l9stat->mode & 0777) != 0) {
 			error = errno;
 			goto out;
 		}
@@ -1432,11 +1432,11 @@ fs_wstat(void *softc, struct l9p_request *req)
 		char *tmp;
 
 		/* Forbid renaming root fid. */
-		if (strcmp(file->name, sc->fs_rootpath) == 0) {
+		if (strcmp(file->ff_name, sc->fs_rootpath) == 0) {
 			error = EINVAL;
 			goto out;
 		}
-		dir = r_dirname(file->name, NULL, 0);
+		dir = r_dirname(file->ff_name, NULL, 0);
 		if (dir == NULL) {
 			error = errno;
 			goto out;
@@ -1446,13 +1446,13 @@ fs_wstat(void *softc, struct l9p_request *req)
 			free(dir);
 			goto out;
 		}
-		if (rename(file->name, newname))
+		if (rename(file->ff_name, newname))
 			error = errno;
 		else {
-			/* Successful rename, update file->name. */
+			/* Successful rename, update file->ff_name. */
 			tmp = newname;
-			newname = file->name;
-			file->name = tmp;
+			newname = file->ff_name;
+			file->ff_name = tmp;
 		}
 		free(newname);
 		free(dir);
@@ -1464,7 +1464,7 @@ out:
 static int
 fs_statfs(void *softc __unused, struct l9p_request *req)
 {
-	struct openfile *file;
+	struct fs_fid *file;
 	struct stat st;
 	struct statfs f;
 	long name_max;
@@ -1472,16 +1472,16 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	if (lstat(file->name, &st) != 0)
+	if (lstat(file->ff_name, &st) != 0)
 		return (errno);
 
-	if (!check_access(&st, file->uid, file->gid, L9P_OREAD))
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OREAD))
 		return (EPERM);
 
-	if (statfs(file->name, &f) != 0)
+	if (statfs(file->ff_name, &f) != 0)
 		return (errno);
 
-	name_max = pathconf(file->name, _PC_NAME_MAX);
+	name_max = pathconf(file->ff_name, _PC_NAME_MAX);
 	if (name_max == -1)
 		return (errno);
 
@@ -1515,8 +1515,8 @@ static int
 fs_lcreate(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
 	struct l9p_fid *dir;
+	struct fs_fid *file;
 	struct stat st;
 	enum l9p_omode p9;
 	char *name;
@@ -1539,21 +1539,21 @@ fs_lcreate(void *softc, struct l9p_request *req)
 
 	/*
 	 * XXX racy, see fs_create.
-	 * Note, file->name is testing the containing dir,
+	 * Note, file->ff_name is testing the containing dir,
 	 * not the file itself.
 	 */
 	file = dir->lo_aux;
-	if (lstat(file->name, &st) != 0)
+	if (lstat(file->ff_name, &st) != 0)
 		return (errno);
 	if (!S_ISDIR(st.st_mode))
 		return (ENOTDIR);
-	if (!check_access(&st, file->uid, req->lr_req.tlcreate.gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, req->lr_req.tlcreate.gid, L9P_OWRITE))
 		return (EPERM);
 	fd = open(newname, flags | O_CREAT | O_EXCL, req->lr_req.tlcreate.mode);
 	if (fd < 0)
 		return (errno);
-	file->fd = fd;
-	if (fchown(fd, file->uid, req->lr_req.tlcreate.gid) != 0)
+	file->ff_fd = fd;
+	if (fchown(fd, file->ff_uid, req->lr_req.tlcreate.gid) != 0)
 		return (errno);
 	if (fstat(fd, &st) != 0)
 		return (errno);
@@ -1570,8 +1570,8 @@ static int
 fs_symlink(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
 	struct l9p_fid *dir;
+	struct fs_fid *file;
 	struct stat st;
 	char *name;
 	char newname[MAXPATHLEN];
@@ -1588,16 +1588,16 @@ fs_symlink(void *softc, struct l9p_request *req)
 
 	file = dir->lo_aux;
 
-	if (lstat(file->name, &st) != 0)
+	if (lstat(file->ff_name, &st) != 0)
 		return (errno);
-	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OWRITE))
 		return (EPERM);
 
 	error = internal_symlink(req->lr_req.tsymlink.symtgt, newname);
 	if (error)
 		return (error);
 
-	if (lchown(newname, file->uid, req->lr_req.tsymlink.gid) != 0 ||
+	if (lchown(newname, file->ff_uid, req->lr_req.tsymlink.gid) != 0 ||
 	    lstat(newname, &st) != 0)
 		return (errno);
 
@@ -1612,8 +1612,8 @@ static int
 fs_mknod(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
 	struct l9p_fid *dir;
+	struct fs_fid *file;
 	struct stat st;
 	uint32_t mode, major, minor;
 	char *name;
@@ -1631,9 +1631,9 @@ fs_mknod(void *softc, struct l9p_request *req)
 
 	file = dir->lo_aux;
 
-	if (lstat(file->name, &st) != 0)
+	if (lstat(file->ff_name, &st) != 0)
 		return (errno);
-	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OWRITE))
 		return (EPERM);
 
 	mode = req->lr_req.tmknod.mode;
@@ -1659,7 +1659,7 @@ fs_mknod(void *softc, struct l9p_request *req)
 	default:
 		return (EINVAL);
 	}
-	if (lchown(newname, file->uid, req->lr_req.tmknod.gid) != 0 ||
+	if (lchown(newname, file->ff_uid, req->lr_req.tmknod.gid) != 0 ||
 	    lstat(newname, &st) != 0)
 		return (errno);
 
@@ -1671,7 +1671,7 @@ static int
 fs_rename(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file, *f2;
+	struct fs_fid *file, *f2;
 	struct stat st;
 	char *olddirname = NULL, *newname = NULL, *swtmp;
 	int error;
@@ -1690,11 +1690,11 @@ fs_rename(void *softc, struct l9p_request *req)
 		return (EROFS);
 
 	/* Client probably should not attempt to rename root. */
-	if (strcmp(file->name, sc->fs_rootpath) == 0) {
+	if (strcmp(file->ff_name, sc->fs_rootpath) == 0) {
 		error = EINVAL;
 		goto out;
 	}
-	olddirname = r_dirname(file->name, NULL, 0);
+	olddirname = r_dirname(file->ff_name, NULL, 0);
 	if (olddirname == NULL) {
 		error = errno;
 		goto out;
@@ -1703,34 +1703,34 @@ fs_rename(void *softc, struct l9p_request *req)
 		error = errno;
 		goto out;
 	}
-	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE)) {
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OWRITE)) {
 		error = EPERM;
 		goto out;
 	}
-	if (strcmp(olddirname, f2->name) != 0) {
-		if (lstat(f2->name, &st) != 0) {
+	if (strcmp(olddirname, f2->ff_name) != 0) {
+		if (lstat(f2->ff_name, &st) != 0) {
 			error = errno;
 			goto out;
 		}
-		if (!check_access(&st, f2->uid, f2->gid, L9P_OWRITE)) {
+		if (!check_access(&st, f2->ff_uid, f2->ff_gid, L9P_OWRITE)) {
 			error = EPERM;
 			goto out;
 		}
 	}
 	if (asprintf(&newname, "%s/%s",
-	    f2->name, req->lr_req.trename.name) < 0) {
+	    f2->ff_name, req->lr_req.trename.name) < 0) {
 		error = ENAMETOOLONG;
 		goto out;
 	}
 
-	if (rename(file->name, newname) != 0) {
+	if (rename(file->ff_name, newname) != 0) {
 		error = errno;
 		goto out;
 	}
 	/* file has been renamed but old fid is not clunked */
 	swtmp = newname;
-	newname = file->name;
-	file->name = swtmp;
+	newname = file->ff_name;
+	file->ff_name = swtmp;
 	error = 0;
 
 out:
@@ -1742,7 +1742,7 @@ out:
 static int
 fs_readlink(void *softc __unused, struct l9p_request *req)
 {
-	struct openfile *file;
+	struct fs_fid *file;
 	ssize_t linklen;
 	char buf[MAXPATHLEN];
 	int error = 0;
@@ -1750,7 +1750,7 @@ fs_readlink(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	linklen = readlink(file->name, buf, sizeof(buf));
+	linklen = readlink(file->ff_name, buf, sizeof(buf));
 	if (linklen < 0)
 		error = errno;
 	else if ((size_t)linklen >= sizeof(buf))
@@ -1765,7 +1765,7 @@ static int
 fs_getattr(void *softc __unused, struct l9p_request *req)
 {
 	uint64_t mask, valid;
-	struct openfile *file;
+	struct fs_fid *file;
 	struct stat st;
 	int error = 0;
 
@@ -1773,7 +1773,7 @@ fs_getattr(void *softc __unused, struct l9p_request *req)
 	assert(file);
 
 	valid = 0;
-	if (lstat(file->name, &st)) {
+	if (lstat(file->ff_name, &st)) {
 		error = errno;
 		goto out;
 	}
@@ -1789,12 +1789,12 @@ fs_getattr(void *softc __unused, struct l9p_request *req)
 		valid |= L9PL_GETATTR_NLINK;
 	}
 	if (mask & L9PL_GETATTR_UID) {
-		/* provide st_uid, or file->uid? */
+		/* provide st_uid, or file->ff_uid? */
 		req->lr_resp.rgetattr.uid = st.st_uid;
 		valid |= L9PL_GETATTR_UID;
 	}
 	if (mask & L9PL_GETATTR_GID) {
-		/* provide st_gid, or file->gid? */
+		/* provide st_gid, or file->ff_gid? */
 		req->lr_resp.rgetattr.gid = st.st_gid;
 		valid |= L9PL_GETATTR_GID;
 	}
@@ -1868,7 +1868,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 	uint64_t mask;
 	struct fs_softc *sc = softc;
 	struct timeval tv[2];
-	struct openfile *file;
+	struct fs_fid *file;
 	struct stat st;
 	int error = 0;
 	uid_t uid, gid;
@@ -1884,7 +1884,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 	 */
 	mask = req->lr_req.tsetattr.valid;
 
-	if (lstat(file->name, &st)) {
+	if (lstat(file->ff_name, &st)) {
 		error = errno;
 		goto out;
 	}
@@ -1895,7 +1895,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 	}
 
 	if (mask & L9PL_SETATTR_MODE) {
-		if (lchmod(file->name, req->lr_req.tsetattr.mode & 0777)) {
+		if (lchmod(file->ff_name, req->lr_req.tsetattr.mode & 0777)) {
 			error = errno;
 			goto out;
 		}
@@ -1906,7 +1906,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 		    (uid_t)-1;
 		gid = mask & L9PL_SETATTR_GID ? req->lr_req.tsetattr.gid :
 		    (gid_t)-1;
-		if (lchown(file->name, uid, gid)) {
+		if (lchown(file->ff_name, uid, gid)) {
 			error = errno;
 			goto out;
 		}
@@ -1914,7 +1914,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 
 	if (mask & L9PL_SETATTR_SIZE) {
 		/* Truncate follows symlinks, is this OK? */
-		if (truncate(file->name, (off_t)req->lr_req.tsetattr.size)) {
+		if (truncate(file->ff_name, (off_t)req->lr_req.tsetattr.size)) {
 			error = errno;
 			goto out;
 		}
@@ -1952,7 +1952,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 				}
 			}
 		}
-		if (lutimes(file->name, tv)) {
+		if (lutimes(file->ff_name, tv)) {
 			error = errno;
 			goto out;
 		}
@@ -1976,9 +1976,9 @@ fs_xattrcreate(void *softc __unused, struct l9p_request *req __unused)
 static int
 fs_readdir(void *softc __unused, struct l9p_request *req)
 {
-	struct openfile *file;
-	struct l9p_dirent de;
 	struct l9p_message msg;
+	struct l9p_dirent de;
+	struct fs_fid *file;
 	struct dirent *dp;
 	struct stat st;
 	int error = 0;
@@ -1986,7 +1986,7 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	if (file->dir == NULL)
+	if (file->ff_dir == NULL)
 		return (ENOTDIR);
 
 	/*
@@ -2001,12 +2001,12 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 	 * clunking the directory first.
 	 */
 	if (req->lr_req.io.offset == 0)
-		rewinddir(file->dir);
+		rewinddir(file->ff_dir);
 	else
-		seekdir(file->dir, (long)req->lr_req.io.offset);
+		seekdir(file->ff_dir, (long)req->lr_req.io.offset);
 
 	l9p_init_msg(&msg, req, L9P_PACK);
-	while ((dp = readdir(file->dir)) != NULL) {
+	while ((dp = readdir(file->ff_dir)) != NULL) {
 		/*
 		 * Although "." is forbidden in naming and ".." is
 		 * special cased, testing shows that we must transmit
@@ -2030,7 +2030,7 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 
 		de.qid.type = 0;
 		generate_qid(&st, &de.qid);
-		de.offset = (uint64_t)telldir(file->dir);
+		de.offset = (uint64_t)telldir(file->ff_dir);
 		de.type = de.qid.type; /* or dp->d_type? */
 		de.name = dp->d_name;
 
@@ -2045,12 +2045,12 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 static int
 fs_fsync(void *softc __unused, struct l9p_request *req)
 {
-	struct openfile *file;
+	struct fs_fid *file;
 	int error = 0;
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
-	if (fsync(file->fd))
+	if (fsync(file->ff_fd))
 		error = errno;
 	return (error);
 }
@@ -2073,9 +2073,9 @@ static int
 fs_link(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
-	struct openfile *dirf;
 	struct l9p_fid *dir;
+	struct fs_fid *file;
+	struct fs_fid *dirf;
 	struct stat st;
 	char *name;
 	char newname[MAXPATHLEN];
@@ -2097,12 +2097,12 @@ fs_link(void *softc, struct l9p_request *req)
 	assert(file != NULL);
 
 	/* Require write access to target directory. */
-	if (lstat(dirf->name, &st))
+	if (lstat(dirf->ff_name, &st))
 		return (errno);
-	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OWRITE))
 		return (EPERM);
 
-	if (link(file->name, newname) != 0)
+	if (link(file->ff_name, newname) != 0)
 		error = errno;
 	return (error);
 }
@@ -2111,8 +2111,8 @@ static int
 fs_mkdir(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
 	struct l9p_fid *dir;
+	struct fs_fid *file;
 	struct stat st;
 	char *name;
 	char newname[MAXPATHLEN];
@@ -2130,16 +2130,16 @@ fs_mkdir(void *softc, struct l9p_request *req)
 	file = dir->lo_aux;
 
 	/* Require write access to target directory. */
-	if (lstat(file->name, &st))
+	if (lstat(file->ff_name, &st))
 		return (errno);
-	if (!check_access(&st, file->uid, req->lr_req.tmkdir.gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, req->lr_req.tmkdir.gid, L9P_OWRITE))
 		return (EPERM);
 
 	error = internal_mkdir(newname, (mode_t)req->lr_req.tmkdir.mode, &st);
 	if (error)
 		return (error);
 
-	if (lchown(newname, file->uid, req->lr_req.tmkdir.gid) != 0 ||
+	if (lchown(newname, file->ff_uid, req->lr_req.tmkdir.gid) != 0 ||
 	    lstat(newname, &st) != 0)
 		return (errno);
 
@@ -2151,7 +2151,7 @@ static int
 fs_renameat(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *olddir, *newdir;
+	struct fs_fid *olddir, *newdir;
 	struct stat st;
 	char *oldname = NULL, *newname = NULL;
 	int error;
@@ -2164,22 +2164,22 @@ fs_renameat(void *softc, struct l9p_request *req)
 		return (EROFS);
 
 	/* Require write access to both source and target directory. */
-	if (lstat(olddir->name, &st))
+	if (lstat(olddir->ff_name, &st))
 		return (errno);
-	if (!check_access(&st, olddir->uid, olddir->gid, L9P_OWRITE))
+	if (!check_access(&st, olddir->ff_uid, olddir->ff_gid, L9P_OWRITE))
 		return (EPERM);
 
 	if (olddir != newdir) {
-		if (lstat(newdir->name, &st))
+		if (lstat(newdir->ff_name, &st))
 			return (errno);
-		if (!check_access(&st, newdir->uid, newdir->gid, L9P_OWRITE))
+		if (!check_access(&st, newdir->ff_uid, newdir->ff_gid, L9P_OWRITE))
 			return (EPERM);
 	}
 
 	if (asprintf(&oldname, "%s/%s",
-		    olddir->name, req->lr_req.trenameat.oldname) < 0 ||
+		    olddir->ff_name, req->lr_req.trenameat.oldname) < 0 ||
 	    asprintf(&newname, "%s/%s",
-		    newdir->name, req->lr_req.trenameat.newname) < 0)
+		    newdir->ff_name, req->lr_req.trenameat.newname) < 0)
 		error = ENAMETOOLONG;
 	else
 		error = rename(oldname, newname);
@@ -2196,8 +2196,8 @@ static int
 fs_unlinkat(void *softc, struct l9p_request *req)
 {
 	struct fs_softc *sc = softc;
-	struct openfile *file;
 	struct l9p_fid *dir;
+	struct fs_fid *file;
 	struct stat st;
 	char *name;
 	char newname[MAXPATHLEN];
@@ -2215,9 +2215,9 @@ fs_unlinkat(void *softc, struct l9p_request *req)
 	file = dir->lo_aux;
 
 	/* Require write access to directory. */
-	if (lstat(file->name, &st))
+	if (lstat(file->ff_name, &st))
 		return (errno);
-	if (!check_access(&st, file->uid, file->gid, L9P_OWRITE))
+	if (!check_access(&st, file->ff_uid, file->ff_gid, L9P_OWRITE))
 		return (EPERM);
 
 	if (req->lr_req.tunlinkat.flags & L9PL_AT_REMOVEDIR) {
@@ -2233,20 +2233,20 @@ fs_unlinkat(void *softc, struct l9p_request *req)
 static void
 fs_freefid(void *softc __unused, struct l9p_fid *fid)
 {
-	struct openfile *f = fid->lo_aux;
+	struct fs_fid *f = fid->lo_aux;
 
 	if (f == NULL) {
 		/* Nothing to do here */
 		return;
 	}
 
-	if (f->fd != -1)
-		close(f->fd);
+	if (f->ff_fd != -1)
+		close(f->ff_fd);
 
-	if (f->dir)
-		closedir(f->dir);
+	if (f->ff_dir)
+		closedir(f->ff_dir);
 
-	free(f->name);
+	free(f->ff_name);
 	free(f);
 }
 

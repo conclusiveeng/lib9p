@@ -2402,7 +2402,7 @@ static int
 fs_lock(void *softc, struct l9p_request *req)
 {
         struct fs_softc *sc = softc;
-        struct openfile *file;
+        struct fs_fid *file;
         struct flock fl;
         int cmd;
 
@@ -2437,12 +2437,12 @@ fs_lock(void *softc, struct l9p_request *req)
 static int
 fs_getlock(void *softc __unused, struct l9p_request *req)
 {
-        struct openfile *file;
+        struct fs_fid *file;
         struct flock fl;
 
         file = req->lr_fid->lo_aux;
 
-        if (fcntl(file->fd, F_GETLK, (void *)&fl) != 0)
+        if (fcntl(file->ff_fd, F_GETLK, (void *)&fl) != 0)
                 return (errno);
 
         req->lr_resp.getlock.proc_id = (uint32_t)fl.l_pid;

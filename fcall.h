@@ -274,6 +274,8 @@ struct l9p_stat {
 	uint32_t n_muid;
 };
 
+#define	L9P_FSTYPE	 0x01021997
+
 struct l9p_statfs {
 	uint32_t type;		/* file system type */
 	uint32_t bsize;		/* block size for I/O */

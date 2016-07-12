@@ -446,7 +446,7 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
 static void dostatfs(struct l9p_statfs *out, struct statfs *in, long namelen)
 {
 
-	out->type = 0;		/* XXX */
+	out->type = L9P_FSTYPE;
 	out->bsize = in->f_bsize;
 	out->blocks = in->f_blocks;
 	out->bfree = in->f_bfree;

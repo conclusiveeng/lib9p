@@ -2449,7 +2449,7 @@ fs_getlock(void *softc __unused, struct l9p_request *req)
         req->lr_resp.getlock.start = (uint64_t)fl.l_start;
         req->lr_resp.getlock.length = (uint64_t)fl.l_len;
         req->lr_resp.getlock.type = (uint8_t)fl.l_type;
-        req->lr_resp.getlock.client_id = (char *)"";  /* XXX should go here? */
+        req->lr_resp.getlock.client_id = (char *)"";  /* XXX what should go here? */
         return (0);
 }
 

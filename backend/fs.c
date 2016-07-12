@@ -1705,7 +1705,7 @@ fs_walk(void *softc, struct l9p_request *req)
 				error = ENAMETOOLONG;
 				break;
 			}
-			memcpy(next, file->ff_name, namelen);
+			memcpy(next, succ, namelen);
 			next[namelen++] = '/';
 			memcpy(&next[namelen], comp, clen + 1);
 			namelen += clen;

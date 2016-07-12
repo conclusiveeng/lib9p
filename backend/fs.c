@@ -573,19 +573,22 @@ fs_attach(void *softc, struct l9p_request *req)
 	struct openfile *file;
 	struct passwd *pwd;
 	struct stat st;
+	uint32_t n_uname;
 	uid_t uid;
 	int error;
 
 	assert(req->lr_fid != NULL);
 
-	uid = req->lr_req.tattach.n_uname;
-	if (req->lr_conn->lc_version >= L9P_2000U && uid != (uid_t)-1) {
+	n_uname = req->lr_req.tattach.n_uname;
+	if (n_uname != L9P_NONUNAME) {
+		uid = (uid_t)n_uname;
 		pwd = getpwuid(uid);
 		if (pwd == NULL)
 			L9P_LOG(L9P_DEBUG,
 			    "Tattach: uid %lu: no such user",
 			    (u_long)uid);
 	} else {
+		uid = (uid_t)-1;
 		pwd = getpwnam(req->lr_req.tattach.uname);
 		if (pwd == NULL)
 			L9P_LOG(L9P_DEBUG,
@@ -618,7 +621,7 @@ fs_attach(void *softc, struct l9p_request *req)
 		return (ENOMEM);
 
 	file->uid = pwd != NULL ? pwd->pw_uid : uid;
-	file->gid = pwd != NULL ? pwd->pw_gid : (uid_t)-1;
+	file->gid = pwd != NULL ? pwd->pw_gid : (gid_t)-1;
 	req->lr_fid->lo_aux = file;
 	generate_qid(&st, &req->lr_resp.rattach.qid);
 	return (0);

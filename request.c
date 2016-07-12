@@ -567,6 +567,10 @@ l9p_dispatch_tattach(struct l9p_request *req)
 	if (req->lr_fid == NULL)
 		return (EINVAL);
 
+	/* For backend convenience, set NONUNAME on 9P2000. */
+	if (conn->lc_version == L9P_2000)
+		req->lr_req.tattach.n_uname = L9P_NONUNAME;
+
 	return (conn->lc_server->ls_backend->attach(conn->lc_server->ls_backend->softc, req));
 }
 

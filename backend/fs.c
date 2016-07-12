@@ -2399,17 +2399,58 @@ fs_fsync(void *softc __unused, struct l9p_request *req)
 }
 
 static int
-fs_lock(void *softc __unused, struct l9p_request *req __unused)
+fs_lock(void *softc, struct l9p_request *req)
 {
+        struct fs_softc *sc = softc;
+        struct openfile *file;
+        struct flock fl;
+        int cmd;
 
-	return (EOPNOTSUPP);
+        if (sc->fs_readonly)
+                return (EROFS);
+
+        cmd = F_SETLK;
+        file = req->lr_fid->lo_aux;
+        fl.l_start = (off_t)req->lr_req.tlock.start;
+        fl.l_len = (off_t)req->lr_req.tlock.length;
+        fl.l_pid = (pid_t)req->lr_req.tlock.proc_id;
+        fl.l_type = req->lr_req.tlock.type;
+        fl.l_whence = SEEK_SET;
+
+        if (req->lr_req.tlock.flags & L9PL_LOCK_TYPE_BLOCK)
+                cmd = F_SETLKW;
+
+        if (fcntl(file->fd, cmd, (void *)&fl) != 0) {
+                if (errno == EAGAIN) {
+                        req->lr_resp.rlock.status = L9PL_LOCK_BLOCKED;
+                        return (0);
+                }
+
+                req->lr_resp.rlock.status = L9PL_LOCK_ERROR;
+                return (0);
+        }
+
+        req->lr_resp.rlock.status = L9PL_LOCK_SUCCESS;
+	return (0);
 }
 
 static int
-fs_getlock(void *softc __unused, struct l9p_request *req __unused)
+fs_getlock(void *softc __unused, struct l9p_request *req)
 {
+        struct openfile *file;
+        struct flock fl;
 
-	return (EOPNOTSUPP);
+        file = req->lr_fid->lo_aux;
+
+        if (fcntl(file->fd, F_GETLK, (void *)&fl) != 0)
+                return (errno);
+
+        req->lr_resp.getlock.proc_id = (uint32_t)fl.l_pid;
+        req->lr_resp.getlock.start = (uint64_t)fl.l_start;
+        req->lr_resp.getlock.length = (uint64_t)fl.l_len;
+        req->lr_resp.getlock.type = (uint8_t)fl.l_type;
+        req->lr_resp.getlock.client_id = (char *)"";  /* XXX should go here? */
+        return (0);
 }
 
 static int

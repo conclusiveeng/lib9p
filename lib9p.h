@@ -192,4 +192,6 @@ void l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 void l9p_freefcall(union l9p_fcall *fcall);
 void l9p_freestat(struct l9p_stat *stat);
 
+gid_t *l9p_getgrlist(const char *, gid_t, int *);
+
 #endif  /* LIB9P_LIB9P_H */

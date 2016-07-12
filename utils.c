@@ -28,7 +28,9 @@
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <assert.h>
 #include <inttypes.h>
 #include <sys/param.h>
@@ -42,6 +44,10 @@
 #include "lib9p.h"
 #include "fcall.h"
 #include "linux_errno.h"
+
+#ifdef __APPLE__
+  #define GETGROUPS_GROUP_TYPE_IS_INT
+#endif
 
 #define N(ary)          (sizeof(ary) / sizeof(*ary))
 
@@ -169,6 +175,47 @@ l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length)
 	}
 
 	return (niov);
+}
+
+/*
+ * This wrapper for getgrouplist() that malloc'ed memory, and
+ * papers over FreeBSD vs Mac differences in the getgrouplist()
+ * argument types.
+ */
+gid_t *
+l9p_getgrlist(const char *name, gid_t basegid, int *angroups)
+{
+#ifdef GETGROUPS_GROUP_TYPE_IS_INT
+	int i, *int_groups;
+#endif
+	gid_t *groups;
+	int ngroups;
+
+	/*
+	 * Todo, perhaps: while getgrouplist() returns -1, expand.
+	 * For now just use NGROUPS_MAX.
+	 */
+	ngroups = NGROUPS_MAX;
+	groups = malloc((size_t)ngroups * sizeof(*groups));
+#ifdef GETGROUPS_GROUP_TYPE_IS_INT
+	int_groups = groups ? malloc((size_t)ngroups * sizeof(*int_groups)) :
+	    NULL;
+	if (int_groups == NULL) {
+		free(groups);
+		groups = NULL;
+	}
+#endif
+	if (groups == NULL)
+		return (NULL);
+#ifdef GETGROUPS_GROUP_TYPE_IS_INT
+	(void) getgrouplist(name, (int)basegid, int_groups, &ngroups);
+	for (i = 0; i < ngroups; i++)
+		groups[i] = (gid_t)int_groups[i];
+#else
+	(void) getgrouplist(name, basegid, groups, &ngroups);
+#endif
+	*angroups = ngroups;
+	return (groups);
 }
 
 /*

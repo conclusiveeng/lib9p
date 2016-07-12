@@ -2404,12 +2404,10 @@ fs_lock(void *softc, struct l9p_request *req)
         struct fs_softc *sc = softc;
         struct fs_fid *file;
         struct flock fl;
-        int cmd;
 
         if (sc->fs_readonly)
                 return (EROFS);
 
-        cmd = F_SETLK;
         file = req->lr_fid->lo_aux;
         fl.l_start = (off_t)req->lr_req.tlock.start;
         fl.l_len = (off_t)req->lr_req.tlock.length;
@@ -2417,10 +2415,7 @@ fs_lock(void *softc, struct l9p_request *req)
         fl.l_type = req->lr_req.tlock.type;
         fl.l_whence = SEEK_SET;
 
-        if (req->lr_req.tlock.flags & L9PL_LOCK_TYPE_BLOCK)
-                cmd = F_SETLKW;
-
-        if (fcntl(file->fd, cmd, (void *)&fl) != 0) {
+        if (fcntl(file->ff_fd, F_SETLK, (void *)&fl) != 0) {
                 if (errno == EAGAIN) {
                         req->lr_resp.rlock.status = L9PL_LOCK_BLOCKED;
                         return (0);

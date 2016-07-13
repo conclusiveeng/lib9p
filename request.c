@@ -642,7 +642,8 @@ l9p_dispatch_twalk(struct l9p_request *req)
 		    req->lr_req.twalk.newfid);
 		if (req->lr_newfid == NULL)
 			return (EBADF);
-	}
+	} else
+		req->lr_newfid = req->lr_fid;
 
 	if (!conn->lc_server->ls_backend->walk)
 		return (ENOSYS);

@@ -1751,6 +1751,14 @@ fs_walk(void *softc, struct l9p_request *req)
 		error = ENOMEM;
 		goto out;
 	}
+	if (req->lr_newfid == req->lr_fid) {
+		/*
+		 * Before overwriting fid->lo_aux, free the old value.
+		 * Note that this doesn't free the l9p_fid data,
+		 * just the fs_fid data.
+		 */
+		fs_freefid(softc, req->lr_fid);
+	}
 	req->lr_newfid->lo_aux = newfile;
 	req->lr_resp.rwalk.nwqid = (uint16_t)i;
 out:

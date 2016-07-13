@@ -808,15 +808,19 @@ fs_attach(void *softc, struct l9p_request *req)
 		return (error == ENOENT || error == ENOTDIR ? error : EPERM);
 	}
 
-	if (pwd != NULL)
+	if (pwd != NULL) {
 		gids = l9p_getgrlist(pwd->pw_name, pwd->pw_gid, &ngroups);
-	else {
+		if (gids == NULL)
+			return (ENOMEM);
+	} else {
 		gids = NULL;
 		ngroups = 0;
 	}
 	ai = malloc(sizeof(*ai) + (size_t)ngroups * sizeof(gid_t));
-	if (ai == NULL)
+	if (ai == NULL) {
+		free(gids);
 		return (ENOMEM);
+	}
 	ai->ai_refcnt = 0;
 	ai->ai_uid = pwd != NULL ? pwd->pw_uid : uid;
 	memcpy(ai->ai_gids, gids, (size_t)ngroups * sizeof(gid_t));

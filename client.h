@@ -9,6 +9,17 @@
 # define NOFID	((uint32_t)(~0))
 
 /*
+ * This is used to send a message and get its response.
+ * The context field is transport-specific.
+ */
+struct l9p_rpc {
+	uint16_t	tag;
+	struct iovec	message;
+	struct iovec	response;
+	void		*context;
+};
+
+/*
  * Similar to l9p_connection, but without the server aspects.
  */
 struct l9p_client_connection {
@@ -20,8 +31,8 @@ struct l9p_client_connection {
 	void	*fids;		// context to determine next fid
 	void	*tags;		// context to determine next hash
 
-	int	(*send_msg)(struct l9p_client_connection *, struct iovec *iov);
-	int	(*recv_msg)(struct l9p_client_connection *, uint16_t tag, union l9p_fcall **response);
+	int	(*send_msg)(struct l9p_client_connection *, struct l9p_rpc *);
+	int	(*recv_msg)(struct l9p_client_connection *, struct l9p_rpc *);
 	uint16_t	(*get_tag)(struct l9p_client_connection *);
 	uint32_t	(*get_fid)(struct l9p_client_connection *);
 	void	(*release_tag)(struct l9p_client_connection *, uint16_t tag);
@@ -30,6 +41,12 @@ struct l9p_client_connection {
 
 int client_pack_message(struct l9p_client_connection *, struct iovec *, union l9p_fcall *);
 int client_unpack_message(struct l9p_client_connection *, struct iovec *, union l9p_fcall *);
+
+/*
+ * RPC functions
+ */
+void p9_destroy_rpc(struct l9p_rpc *msg);
+int p9_send_and_reply(struct l9p_client_connection *, union l9p_fcall *, union l9p_fcall **);
 
 /*
  * Functions to create a p9 message.

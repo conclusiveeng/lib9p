@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <sys/param.h>
 #include <sys/uio.h>
+#include <err.h>
 #ifdef __APPLE__
 # include "apple_endian.h"
 #else
@@ -70,6 +71,81 @@ client_unpack_message(struct l9p_client_connection *client, struct iovec *msg, u
 		
 }
 
+void
+p9_destroy_rpc(struct l9p_rpc *msg)
+{
+	if (msg) {
+		if (msg->message.iov_base) {
+			l9p_free(msg->message.iov_base);
+			msg->message.iov_base = NULL;
+		}
+		if (msg->response.iov_base) {
+			l9p_free(msg->response.iov_base);
+			msg->response.iov_base = NULL;
+		}
+	}
+	return;
+}
+			
+/*
+ * Send a p9 message, and get its reply.
+ * Returns an error, and sets *response to NULL if
+ * unable to send the message.  If the response is
+ * an error message, then it returns the error, and *response
+ * is not NULL.
+ */
+int
+p9_send_and_reply(struct l9p_client_connection *conn,
+	    union l9p_fcall *send,
+	    union l9p_fcall **response)
+{
+	struct sbuf *sb = sbuf_new_auto();
+	int error = 0;
+	struct l9p_rpc msg;
+
+
+	*response = NULL;
+	bzero(&msg, sizeof(msg));
+
+	// All messages have a tag
+	msg.tag = send->hdr.tag;
+
+	l9p_describe_fcall(send, conn->lc_version, sb);
+	puts(sbuf_data(sb));
+	sbuf_clear(sb);
+
+	error = client_pack_message(conn, &msg.message, send);
+	if (error)
+		goto done;
+
+	error = conn->send_msg(conn, &msg);
+
+	if (error == 0)
+		error = conn->recv_msg(conn, &msg);
+
+	if (error == 0) {
+		*response = l9p_calloc(1, sizeof(**response));
+		if (*response == NULL)
+			error = ENOMEM;
+	}
+
+	if (error == 0) {
+		error = client_unpack_message(conn, &msg.response, *response);
+	}
+	if (error)
+		goto done;
+
+	if ((*response)->hdr.type == L9P_RERROR)
+		error = (int)(*response)->error.errnum;
+
+done:
+	if (msg.message.iov_base)
+		l9p_free(msg.message.iov_base);
+//	if (sb)
+//		sbuf_delete(sb);
+	return (error);
+}
+
 /*
  * Construct a l9p_message from the parameters.
  */
@@ -82,6 +158,7 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 	uint32_t maxsize;
 	char *version_string;
 
+	bzero(fcallp, sizeof(*fcallp));
 	/*
 	 * Every T message except for TVERSION has <type, tag, fid>
 	 * If I start supporting creating R messages, this will have to

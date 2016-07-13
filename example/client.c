@@ -94,34 +94,27 @@ default_release_fid(struct l9p_client_connection *conn, uint32_t fid)
 }
 
 static int
-socket_send(struct l9p_client_connection *conn, struct iovec *iov)
+socket_send(struct l9p_client_connection *conn, struct l9p_rpc *msg)
 {
 	struct socket_connection *ctx = conn->context;
 	ssize_t nwritten;
 
 	// Should wrap some of this up in macros or functions
-	nwritten = write(ctx->s, iov->iov_base, iov->iov_len);
+	nwritten = write(ctx->s, msg->message.iov_base, msg->message.iov_len);
 	if (nwritten == -1)
 		return (errno);
-	if ((size_t)nwritten != iov->iov_len)
+	if ((size_t)nwritten != msg->message.iov_len)
 		abort();	// for now
 	return 0;
 }
 
 static int
-socket_recv(struct l9p_client_connection *conn, uint16_t tag, union l9p_fcall **response)
+socket_recv(struct l9p_client_connection *conn, struct l9p_rpc *msg)
 {
 	uint32_t msg_size;
 	uint8_t *msg_buffer;
 	ssize_t nread;
-	int error;
 	struct socket_connection *ctx = conn->context;
-	union l9p_fcall *tfcp;
-	struct iovec iovc;
-
-	tfcp = l9p_calloc(1, sizeof(*tfcp));
-	if (tfcp == NULL)
-		return (ENOMEM);
 
 	nread = read(ctx->s, &msg_size, sizeof(msg_size));
 	if (nread == -1) {
@@ -146,24 +139,11 @@ socket_recv(struct l9p_client_connection *conn, uint16_t tag, union l9p_fcall **
 		l9p_free(msg_buffer);
 		return (EINVAL);
 	}
-	iovc.iov_base = msg_buffer;
-	iovc.iov_len = msg_size;
-	error = client_unpack_message(conn, &iovc, tfcp);
-
-	l9p_free(msg_buffer);
-	*response = tfcp;
-	// This part should probably go in a common function
-	if (tag != NOTAG)
-		conn->release_tag(conn, (*response)->hdr.tag);
-	if (error == 0) {
-		if ((*response)->hdr.tag != tag) {
-			warnx("Tag is out of sync, dropping buffer (%#x vs %#x)", (*response)->hdr.tag, tag);
-//			l9p_free(*response);
-//			return (EINVAL);
-		}
-	}
-	return (error);
+	msg->response.iov_base = msg_buffer;
+	msg->response.iov_len = msg_size;
+	return (0);
 }
+
 static int
 get_socket(char *host, char *port)
 {
@@ -245,6 +225,7 @@ L9P_VERSION(char *version) {
 		return (L9P_INVALID_VERSION);
 }
 
+#if 0
 int
 talk(struct l9p_client_connection *conn, union l9p_fcall *transmit, union l9p_fcall **response)
 {
@@ -275,6 +256,7 @@ done:
 	sbuf_delete(sb);
 	return (error);
 }
+#endif
 
 int
 main(int ac, char *av[])
@@ -306,37 +288,27 @@ main(int ac, char *av[])
 		err(1, "Could not connect to %s:%s", host, port);
 	} else {
 		int rv;
-		union l9p_fcall *fcp, fcall;
+		union l9p_fcall *fcp = NULL, fcall;
 		uint16_t tag;
 		char *version = "9P2000.u"; // or 9P2000.u
-		struct iovec iovc;
 		struct sbuf *sb = sbuf_new_auto();
 
 		rv = p9_msg(&conn, &fcall, L9P_TVERSION, &tag, 1024 * 1024, version);
 		if (rv) {
 			errc(1, rv, "Could not create p9 message");
 		}
-		rv = client_pack_message(&conn, &iovc, &fcall);
+
+		rv = p9_send_and_reply(&conn, &fcall, &fcp);
+		// Don't need to l9p_freefcall(&fcall) because nothing was allocated during it.
+
 		if (rv) {
-			errc(1, rv, "Could not pack p9 message");
+			errc(1, rv, "tversion");
 		}
-		rv = conn.send_msg(&conn, &iovc);
-		l9p_free(iovc.iov_base);
-		if (rv) {
-			errc(1, rv,"Could not write p9 version message");
-		}
-		rv = conn.recv_msg(&conn, tag, &fcp);
-		if (rv) {
-			errc(1, rv, "Could not read p9 version response");
-		}
-		if (fcp->hdr.type == L9P_RERROR) {
-			errc(1, (int)fcp->error.errnum, "Got error resposne from server");
-		}
-		if (fcp->hdr.type != L9P_RVERSION) {
-			errx(1, "Got an invalid response to version message, type %d", fcp->hdr.type);
-		}
-		printf("Response max size = %u, version = %s\n",
-		       fcp->version.msize, fcp->version.version);
+
+		l9p_describe_fcall(fcp, conn.lc_version, sb);
+		printf("%s\n", sbuf_data(sb));
+		sbuf_clear(sb);
+
 		conn.lc_max_io_size = fcp->version.msize;
 		conn.lc_version = L9P_VERSION(fcp->version.version);
 		if (strcmp(version, fcp->version.version) != 0) {
@@ -346,43 +318,16 @@ main(int ac, char *av[])
 		l9p_free(fcp);
 
 		conn.root_fid = conn.get_fid(&conn);
-#if 0
+
 		rv = p9_msg(&conn, &fcall, L9P_TATTACH, &tag, conn.root_fid, NOFID, "sef", "", (uint32_t)geteuid());
 		if (rv) {
 			errc(1, rv, "Could not create p9 attach message");
 		}
-		rv = client_pack_message(&conn, &iovc, &fcall);
-#else
-		rv = packed_p9_msg(&conn, &iovc, L9P_TATTACH, &tag, conn.root_fid, NOFID, "sef", "", (uint32_t)geteuid());
-#endif
-		if (rv) {
-			errc(1, rv, "Could not pack p9 attach message");
-		}
-		rv = conn.send_msg(&conn, &iovc);
-		l9p_free(iovc.iov_base);
-		if (rv) {
-			errc(1, rv, "Could not send attach message");
-		}
-		rv = conn.recv_msg(&conn, tag, &fcp);
-		if (rv != 0) {
-			errc(1, rv, "Could not receive rattach message");
-		}
-		l9p_freefcall(fcp);
-		l9p_free(fcp);
 
-		rv = packed_p9_msg(&conn, &iovc, L9P_TSTAT, &tag, conn.root_fid);
-		if (rv) {
-			errc(1, rv, "Could not pack p9 tstat message");
-		}
-		rv = conn.send_msg(&conn, &iovc);
-		l9p_free(iovc.iov_base);
-		if (rv) {
-			errc(1, rv, "Could not send tstat message");
-		}
+		rv = p9_send_and_reply(&conn, &fcall, &fcp);
 
-		rv = conn.recv_msg(&conn, tag,  &fcp);
 		if (rv) {
-			errc(1, rv, "Could not recieve rstat message");
+			errc(1, rv, "tattach");
 		}
 		l9p_describe_fcall(fcp, conn.lc_version, sb);
 		puts(sbuf_data(sb));
@@ -390,6 +335,64 @@ main(int ac, char *av[])
 
 		l9p_freefcall(fcp);
 		l9p_free(fcp);
+
+		rv = p9_msg(&conn, &fcall, L9P_TSTAT, &tag, conn.root_fid);
+		if (rv) {
+			errc(1, rv, "Could not pack p9 tstat message");
+		}
+		rv = p9_send_and_reply(&conn, &fcall, &fcp);
+		if (rv) {
+			errc(1, rv, "tstat of root fid");
+		}
+
+		l9p_describe_fcall(fcp, conn.lc_version, sb);
+		puts(sbuf_data(sb));
+		sbuf_clear(sb);
+
+		l9p_freefcall(fcp);
+		l9p_free(fcp);
+
+		{
+			uint32_t root_read = conn.get_fid(&conn);
+			// Let's try to open up the root directory for reading
+			rv = p9_msg(&conn, &fcall, L9P_TWALK, &tag, conn.root_fid, root_read, NULL);
+			if (rv == 0)
+				rv = p9_send_and_reply(&conn, &fcall, &fcp);
+			if (rv == 0) {
+				l9p_describe_fcall(fcp, conn.lc_version, sb);
+				puts(sbuf_data(sb));
+				sbuf_clear(sb);
+				l9p_freefcall(&fcall);
+				rv = p9_msg(&conn, &fcall, L9P_TOPEN, &tag, root_read, L9P_OREAD);
+			}
+			if (rv == 0) {
+				rv = p9_send_and_reply(&conn, &fcall, &fcp);
+			}
+			if (rv == 0) {
+				l9p_describe_fcall(fcp, conn.lc_version, sb);
+				puts(sbuf_data(sb));
+				sbuf_clear(sb);
+				l9p_freefcall(&fcall);
+				l9p_freefcall(fcp);
+				l9p_free(fcp);
+				rv = p9_msg(&conn, &fcall, L9P_TREAD, &tag, root_read, (uint64_t)0, 1024);
+			}
+			if (rv == 0) {
+				rv = p9_send_and_reply(&conn, &fcall, &fcp);
+				if (rv == 0 || fcp) {
+					l9p_describe_fcall(fcp, conn.lc_version, sb);
+					puts(sbuf_data(sb));
+					sbuf_clear(sb);
+				}
+				if (fcp) {
+					l9p_freefcall(fcp);
+					l9p_free(fcp);
+				}
+			}
+			rv = p9_msg(&conn, &fcall, L9P_TCLUNK, &tag, root_read);
+			rv = p9_send_and_reply(&conn, &fcall, &fcp);
+			conn.release_fid(&conn, root_read);
+		}
 
 		uint32_t new_fid = conn.get_fid(&conn);
 
@@ -399,7 +402,7 @@ main(int ac, char *av[])
 		if (rv) {
 			errc(1, rv, "Could not create twalk message");
 		}
-		rv = talk(&conn, &fcall, &fcp);
+		rv = p9_send_and_reply(&conn, &fcall, &fcp);
 		l9p_freefcall(&fcall);
 
 		if (rv) {
@@ -411,32 +414,17 @@ main(int ac, char *av[])
 
 		l9p_freefcall(fcp);
 		l9p_free(fcp);
-#if 1
+
 		rv = p9_msg(&conn, &fcall, L9P_TOPEN, &tag, new_fid, L9P_OREAD);
 		if (rv) {
 			errc(1, rv, "Could not create p9 topen message");
 		}
-		rv = talk(&conn, &fcall, &fcp);
+		rv = p9_send_and_reply(&conn, &fcall, &fcp);
 		l9p_freefcall(&fcall);
 		if (rv) {
 			errc(1, rv, "topen");
 		}
-#else
-		rv = packed_p9_msg(&conn, &iovc, L9P_TOPEN, &tag, new_fid, L9P_OREAD);
-		if (rv) {
-			errc(1, rv, "Could not pack p9 topen message");
-		}
-		rv = conn.send_msg(&conn, &iovc);
-		l9p_free(iovc.iov_base);
-		if (rv) {
-			errc(1, rv, "Could not send topen message");
-		}
-		
-		rv = conn.recv_msg(&conn, tag, &fcp);
-		if (rv) {
-			errc(1, rv, "Could not receive ropen message");
-		}
-#endif
+
 		l9p_describe_fcall(fcp, conn.lc_version, sb);
 		puts(sbuf_data(sb));
 		sbuf_clear(sb);

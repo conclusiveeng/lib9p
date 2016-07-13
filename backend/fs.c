@@ -158,12 +158,12 @@ static int fs_isymlink(void *, struct l9p_fid *, char *, char *,
  * Internal functions implementing backend.
  */
 static int fs_attach(void *, struct l9p_request *);
-static int fs_clunk(void *, struct l9p_request *);
+static int fs_clunk(void *, struct l9p_fid *);
 static int fs_create(void *, struct l9p_request *);
 static int fs_flush(void *, struct l9p_request *);
 static int fs_open(void *, struct l9p_request *);
 static int fs_read(void *, struct l9p_request *);
-static int fs_remove(void *, struct l9p_request *);
+static int fs_remove(void *, struct l9p_fid *);
 static int fs_stat(void *, struct l9p_request *);
 static int fs_walk(void *, struct l9p_request *);
 static int fs_write(void *, struct l9p_request *);
@@ -838,11 +838,11 @@ fs_attach(void *softc, struct l9p_request *req)
 }
 
 static int
-fs_clunk(void *softc __unused, struct l9p_request *req)
+fs_clunk(void *softc __unused, struct l9p_fid *fid)
 {
 	struct fs_fid *file;
 
-	file = req->lr_fid->lo_aux;
+	file = fid->lo_aux;
 	assert(file != NULL);
 
 	if (file->ff_dir) {
@@ -1542,15 +1542,13 @@ fs_read(void *softc __unused, struct l9p_request *req)
 }
 
 static int
-fs_remove(void *softc, struct l9p_request *req)
+fs_remove(void *softc, struct l9p_fid *fid)
 {
-	struct l9p_fid *fid;
 	struct fs_fid *file;
 	struct stat st;
 	char namebuf[MAXPATHLEN];
 	int error;
 
-	fid = req->lr_fid;
 	error = fs_rdf(softc, fid, namebuf, sizeof(namebuf), &st);
 	if (error)
 		return (error);

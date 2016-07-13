@@ -39,6 +39,7 @@
 #include "lib9p.h"
 #include "lib9p_impl.h"
 #include "fcall.h"
+#include "fid.h"
 #include "hashtable.h"
 #include "log.h"
 #include "linux_errno.h"
@@ -321,34 +322,6 @@ l9p_respond(struct l9p_request *req, int errnum)
 	struct sbuf *sb;
 #endif
 
-	switch (req->lr_req.hdr.type) {
-
-	case L9P_TATTACH:
-		/*
-		 * XXX logically this should use lr_newfid,
-		 * since the fid is always actually new, but
-		 * for now stick with minimal code changes.
-		 * This code will go away soon anyway!
-		 */
-		if (errnum != 0 && req->lr_fid != NULL)
-			l9p_connection_remove_fid(conn, req->lr_fid);
-
-		break;
-
-	case L9P_TCLUNK:
-	case L9P_TREMOVE:
-		if (req->lr_fid != NULL)
-			l9p_connection_remove_fid(conn, req->lr_fid);
-		break;
-
-	case L9P_TWALK:
-	case L9P_TXATTRWALK:
-		if (errnum != 0 && req->lr_newfid != NULL &&
-		    req->lr_newfid != req->lr_fid)
-			l9p_connection_remove_fid(conn, req->lr_newfid);
-		break;
-	}
-
 	req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
 
 	if (errnum == 0)
@@ -562,24 +535,49 @@ static int
 l9p_dispatch_tattach(struct l9p_request *req)
 {
 	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_backend *be;
+	struct l9p_fid *fid;
+	int error;
 
-	req->lr_fid = l9p_connection_alloc_fid(conn, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL)
+	fid = l9p_connection_alloc_fid(conn, req->lr_req.hdr.fid);
+	if (fid == NULL)
 		return (EINVAL);
 
+	be = conn->lc_server->ls_backend;
+
+	req->lr_fid = fid;
 	/* For backend convenience, set NONUNAME on 9P2000. */
 	if (conn->lc_version == L9P_2000)
 		req->lr_req.tattach.n_uname = L9P_NONUNAME;
+	error = be->attach(be->softc, req);
 
-	return (conn->lc_server->ls_backend->attach(conn->lc_server->ls_backend->softc, req));
+	/* On success, fid becomes valid; on failure, disconnect. */
+	if (error == 0)
+		l9p_fid_setvalid(fid);
+	else
+		l9p_connection_remove_fid(conn, fid);
+	return (error);
 }
 
 static int
 l9p_dispatch_tclunk(struct l9p_request *req)
 {
+	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_backend *be;
+	struct l9p_fid *fid;
+	int error;
 
-	/* clunk is not optional but we can still use the generic dispatch */
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->clunk));
+	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (fid == NULL)
+		return (EIO);
+
+	be = conn->lc_server->ls_backend;
+	l9p_fid_unsetvalid(fid);
+
+	error = be->clunk(be->softc, fid);
+	/* fid is now gone regardless of any error return */
+	l9p_connection_remove_fid(conn, fid);
+	return (error);
 }
 
 static int
@@ -617,8 +615,22 @@ l9p_dispatch_tread(struct l9p_request *req)
 static int
 l9p_dispatch_tremove(struct l9p_request *req)
 {
+	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_backend *be;
+	struct l9p_fid *fid;
+	int error;
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->remove));
+	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (fid == NULL)
+		return (EIO);
+
+	be = conn->lc_server->ls_backend;
+	l9p_fid_unsetvalid(fid);
+
+	error = be->remove(be->softc, fid);
+	/* fid is now gone regardless of any error return */
+	l9p_connection_remove_fid(conn, fid);
+	return (error);
 }
 
 static int
@@ -632,23 +644,38 @@ static int
 l9p_dispatch_twalk(struct l9p_request *req)
 {
 	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_backend *be;
+	struct l9p_fid *fid, *newfid;
+	int error;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL)
+	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (fid == NULL)
 		return (EBADF);
 
 	if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
-		req->lr_newfid = l9p_connection_alloc_fid(conn,
+		newfid = l9p_connection_alloc_fid(conn,
 		    req->lr_req.twalk.newfid);
-		if (req->lr_newfid == NULL)
+		if (newfid == NULL)
 			return (EBADF);
 	} else
-		req->lr_newfid = req->lr_fid;
+		newfid = fid;
 
-	if (!conn->lc_server->ls_backend->walk)
-		return (ENOSYS);
-
-	return (conn->lc_server->ls_backend->walk(conn->lc_server->ls_backend->softc, req));
+	be = conn->lc_server->ls_backend;
+	req->lr_fid = fid;
+	req->lr_newfid = newfid;
+	error = be->walk(be->softc, req);
+	/*
+	 * If newfid == fid, then fid itself has changed,
+	 * but is still valid.  Otherwise set newfid valid on
+	 * success, and destroy it on error.
+	 */
+	if (newfid != fid) {
+		if (error == 0)
+			l9p_fid_setvalid(newfid);
+		else
+			l9p_connection_remove_fid(conn, newfid);
+	}
+	return (error);
 }
 
 static int
@@ -751,40 +778,70 @@ static int
 l9p_dispatch_txattrwalk(struct l9p_request *req)
 {
 	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_backend *be;
+	struct l9p_fid *fid, *newfid;
+	int error;
 
-	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
-	if (req->lr_fid == NULL)
+	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (fid == NULL)
 		return (EBADF);
 
-	/*
-	 * XXX
-	 *
-	 * We need a way to mark a fid as used-for-xattr.  (Or
-	 * maybe these xattr fids should be completely separate
-	 * from file/directory fids?)
-	 *
-	 * For now, this relies on the backend always failing the
-	 * operation.
-	 */
-	if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
-		req->lr_newfid = l9p_connection_alloc_fid(conn,
-		    req->lr_req.twalk.newfid);
-		if (req->lr_newfid == NULL)
+	if (req->lr_req.txattrwalk.hdr.fid != req->lr_req.txattrwalk.newfid) {
+		newfid = l9p_connection_alloc_fid(conn,
+		    req->lr_req.txattrwalk.newfid);
+		if (newfid == NULL)
 			return (EBADF);
-	}
+	} else
+		newfid = fid;
 
-	if (!conn->lc_server->ls_backend->xattrwalk)
+	be = conn->lc_server->ls_backend;
+	if (be->xattrwalk == NULL)
 		return (ENOSYS);
 
-	return (conn->lc_server->ls_backend->xattrwalk(
-	    conn->lc_server->ls_backend->softc, req));
+	req->lr_fid = fid;
+	req->lr_newfid = newfid;
+	error = be->xattrwalk(be->softc, req);
+
+	/*
+	 * Success/fail is similar to Twalk, except that we need
+	 * to set the xattr type bit in the new fid (even if the
+	 * new fid is the input fid).
+	 */
+	if (newfid != fid) {
+		if (error == 0)
+			l9p_fid_setvalid(newfid);
+		else
+			l9p_connection_remove_fid(conn, newfid);
+	}
+	if (error == 0)
+		l9p_fid_setxattr(newfid);
+	return (error);
 }
 
 static int
 l9p_dispatch_txattrcreate(struct l9p_request *req)
 {
+	struct l9p_connection *conn = req->lr_conn;
+	struct l9p_backend *be;
+	struct l9p_fid *fid;
+	int error;
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->xattrcreate));
+	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
+	if (fid == NULL)
+		return (EIO);
+
+	be = conn->lc_server->ls_backend;
+	if (be->xattrcreate == NULL)
+		return (ENOSYS);
+
+	req->lr_fid = fid;
+	error = be->xattrcreate(be->softc, req);
+	/*
+	 * On success, fid has changed from regular fid to xattr fid.
+	 */
+	if (error == 0)
+		l9p_fid_setxattr(fid);
+	return (error);
 }
 
 static int

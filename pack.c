@@ -48,7 +48,6 @@
 #define STRING_SIZE(s)  (L9P_WORD + (s != NULL ? (uint16_t)strlen(s) : 0))
 #define QID_SIZE        (L9P_BYTE + L9P_DWORD + L9P_QWORD)
 
-static ssize_t l9p_iov_io(struct l9p_message *, void *, size_t);
 static inline ssize_t l9p_pu8(struct l9p_message *, uint8_t *);
 static inline ssize_t l9p_pu16(struct l9p_message *, uint16_t *);
 static inline ssize_t l9p_pu32(struct l9p_message *, uint32_t *);
@@ -65,7 +64,7 @@ static ssize_t l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q);
  * Returns the number of bytes actually transferred (which is always
  * just len itself, converted to signed), or -1 if we ran out of space.
  */
-static ssize_t
+ssize_t
 l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
 {
 	size_t done = 0;

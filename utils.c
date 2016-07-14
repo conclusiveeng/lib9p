@@ -129,6 +129,17 @@ static const char *ftype_names[] = {
 };
 #undef X
 
+int
+l9p_msg_add_iovec(struct l9p_message *msg, struct iovec *iov)
+{
+	size_t indx;
+	if (msg->lm_niov >= L9P_MAX_IOV)
+		return (ERANGE);
+	indx = msg->lm_niov++;
+	msg->lm_iov[indx] = *iov;
+	return 0;
+}
+
 void
 l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,
     size_t *niov2, size_t seek)

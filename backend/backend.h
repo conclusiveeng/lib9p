@@ -35,7 +35,6 @@ struct l9p_backend {
 	int (*attach)(void *, struct l9p_request *);
 	int (*clunk)(void *, struct l9p_fid *);
 	int (*create)(void *, struct l9p_request *);
-	int (*flush)(void *, struct l9p_request *);
 	int (*open)(void *, struct l9p_request *);
 	int (*read)(void *, struct l9p_request *);
 	int (*remove)(void *, struct l9p_fid *);

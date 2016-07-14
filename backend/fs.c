@@ -160,7 +160,6 @@ static int fs_isymlink(void *, struct l9p_fid *, char *, char *,
 static int fs_attach(void *, struct l9p_request *);
 static int fs_clunk(void *, struct l9p_fid *);
 static int fs_create(void *, struct l9p_request *);
-static int fs_flush(void *, struct l9p_request *);
 static int fs_open(void *, struct l9p_request *);
 static int fs_read(void *, struct l9p_request *);
 static int fs_remove(void *, struct l9p_fid *);
@@ -936,14 +935,6 @@ fs_create(void *softc, struct l9p_request *req)
 	if (error == 0)
 		generate_qid(&st, &req->lr_resp.rcreate.qid);
 	return (error);
-}
-
-static int
-fs_flush(void *softc __unused, struct l9p_request *req __unused)
-{
-
-	/* XXX: not used because this transport is synchronous */
-	return (0);
 }
 
 /*
@@ -2635,7 +2626,6 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->attach = fs_attach;
 	backend->clunk = fs_clunk;
 	backend->create = fs_create;
-	backend->flush = fs_flush;
 	backend->open = fs_open;
 	backend->read = fs_read;
 	backend->remove = fs_remove;

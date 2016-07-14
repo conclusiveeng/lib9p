@@ -581,14 +581,29 @@ l9p_dispatch_tclunk(struct l9p_request *req)
 }
 
 static int
-l9p_dispatch_tflush(struct l9p_request *req)
+l9p_dispatch_tflush(struct l9p_request *req __unused)
 {
-	struct l9p_connection *conn = req->lr_conn;
 
-	if (!conn->lc_server->ls_backend->flush)
-		return (ENOSYS);
-
-	return (conn->lc_server->ls_backend->flush(conn->lc_server->ls_backend->softc, req));
+	/*
+	 * Tflush needs to coordinate with the backend:
+	 * when we spin off an asynchronous operation
+	 * (as a thread, or using AIO), the backend will
+	 * return a special "error" value indicating that
+	 * the request is still pending, and we will put
+	 * it on a queue.
+	 *
+	 * When we get a flush we'll look up the pending
+	 * request and attempt to cancel it.
+	 *
+	 * When the backend completes a spun-off operation
+	 * it will do an upcall to really finish the request.
+	 *
+	 * (Details, including any locking, are still TBD.)
+	 *
+	 * For now, the code is completely synchronous so
+	 * this is a no-op.
+	 */
+	return (0);
 }
 
 static int

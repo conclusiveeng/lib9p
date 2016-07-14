@@ -23,12 +23,13 @@
 
 /*
  * Pack the fcall into msg.
+ * This always packs msg->message to msg->message_data
  */
 int
-client_pack_message(struct l9p_client_connection *client, struct iovec *msg, union l9p_fcall *fcallp)
+client_pack_message(struct l9p_client_rpc *msg)
 {
+	struct l9p_client_connection *client = msg->conn;
 	int error;
-	struct l9p_message packed_msg;
 	void *buffer;
 
 	buffer = l9p_calloc(1, client->lc_max_io_size);
@@ -36,57 +37,42 @@ client_pack_message(struct l9p_client_connection *client, struct iovec *msg, uni
 		return (ENOMEM);
 	}
 
-	bzero(&packed_msg, sizeof(packed_msg));
-	packed_msg.lm_mode = L9P_PACK;
-	packed_msg.lm_iov[0].iov_base = buffer;
-	packed_msg.lm_iov[0].iov_len = client->lc_max_io_size;
-	packed_msg.lm_niov = 1;
+	bzero(&msg->message_data, sizeof(msg->message_data));
+	msg->message_data.lm_mode = L9P_PACK;
+	msg->message_data.lm_iov[0].iov_base = buffer;
+	msg->message_data.lm_iov[0].iov_len = client->lc_max_io_size;
+	msg->message_data.lm_niov = 1;
 
-	error = l9p_pufcall(&packed_msg, fcallp, client->lc_version);
+	error = l9p_pufcall(&msg->message_data, &msg->message, client->lc_version);
 	if (error) {
 		l9p_free(buffer);
-		msg->iov_base = 0;
-		msg->iov_len = 0;
+		bzero(&msg->message_data, sizeof(msg->message_data));
 	} else {
-		msg->iov_base = buffer;
-		msg->iov_len = packed_msg.lm_size;
+		msg->message_data.lm_iov[0].iov_len = msg->message_data.lm_size;
 	}
 	return (error);
 }
 
+/*
+ * Unpacks a message.
+ * The message is in msg->response_data, and should have at least one iovec
+ * structure filled out.  This is a much simpler function than it used to
+ * be.  Any response with data (Rread{,dir}, maybe others?) will have the
+ * data accessible using l9p_iov_io(msg->response_data, buffer, len).
+ */
 int
-client_unpack_message(struct l9p_client_connection *client, struct iovec *msg, union l9p_fcall *fcallp)
+client_unpack_message(struct l9p_client_rpc *msg)
 {
 	int error = 0;
-	struct l9p_message packed_msg;
 
-	bzero(&packed_msg, sizeof(packed_msg));
-	packed_msg.lm_mode = L9P_UNPACK;
-	packed_msg.lm_iov[0] = *msg;
-	packed_msg.lm_niov = 1;
-
-	error = l9p_pufcall(&packed_msg, fcallp, client->lc_version);
+	bzero(&msg->response, sizeof(msg->response));
+	msg->response_data.lm_mode = L9P_UNPACK;
+	error = l9p_pufcall(&msg->response_data, &msg->response, msg->conn->lc_version);
 
 	return (error);
 		
 }
 
-void
-p9_destroy_rpc(struct l9p_rpc *msg)
-{
-	if (msg) {
-		if (msg->message.iov_base) {
-			l9p_free(msg->message.iov_base);
-			msg->message.iov_base = NULL;
-		}
-		if (msg->response.iov_base) {
-			l9p_free(msg->response.iov_base);
-			msg->response.iov_base = NULL;
-		}
-	}
-	return;
-}
-			
 /*
  * Send a p9 message, and get its reply.
  * Returns an error, and sets *response to NULL if
@@ -95,54 +81,48 @@ p9_destroy_rpc(struct l9p_rpc *msg)
  * is not NULL.
  */
 int
-p9_send_and_reply(struct l9p_client_connection *conn,
-	    union l9p_fcall *send,
-	    union l9p_fcall **response)
+p9_send_and_reply(struct l9p_client_rpc *msg)
 {
 	struct sbuf *sb = sbuf_new_auto();
+	union l9p_fcall *send, *recv;
 	int error = 0;
-	struct l9p_rpc msg;
+	struct l9p_client_connection *conn = msg->conn;
 
-
-	*response = NULL;
-	bzero(&msg, sizeof(msg));
+	bzero(&msg->message_data, sizeof(msg->message_data));
+	bzero(&msg->response, sizeof(msg->response));
+	bzero(&msg->response_data, sizeof(msg->response_data));
 
 	// All messages have a tag
-	msg.tag = send->hdr.tag;
+	send = &msg->message;
+	recv = &msg->response;
+
+	msg->tag = send->hdr.tag;
 
 	l9p_describe_fcall(send, conn->lc_version, sb);
 	puts(sbuf_data(sb));
 	sbuf_clear(sb);
 
-	error = client_pack_message(conn, &msg.message, send);
+	error = client_pack_message(msg);
 	if (error)
 		goto done;
 
-	error = conn->send_msg(conn, &msg);
+	error = conn->send_msg(msg);
 
 	if (error == 0)
-		error = conn->recv_msg(conn, &msg);
+		error = conn->recv_msg(msg);
 
 	if (error == 0) {
-		*response = l9p_calloc(1, sizeof(**response));
-		if (*response == NULL)
-			error = ENOMEM;
-	}
-
-	if (error == 0) {
-		error = client_unpack_message(conn, &msg.response, *response);
+		error = client_unpack_message(msg);
 	}
 	if (error)
 		goto done;
 
-	if ((*response)->hdr.type == L9P_RERROR)
-		error = (int)(*response)->error.errnum;
+	if (msg->response.hdr.type == L9P_RERROR)
+		error = (int)(msg->response.error.errnum);
 
 done:
-	if (msg.message.iov_base)
-		l9p_free(msg.message.iov_base);
-//	if (sb)
-//		sbuf_delete(sb);
+	if (sb)
+		sbuf_delete(sb);
 	return (error);
 }
 
@@ -241,12 +221,12 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 		STD(fcallp, type, *tagp, ap);
 		fcallp->io.offset = va_arg(ap, uint64_t);
 		fcallp->io.count = va_arg(ap, uint32_t);
-		fcallp->io.data = NULL;
 		break;
 	case L9P_TWRITE:
 		STD(fcallp, type, *tagp, ap);
 		fcallp->io.offset = va_arg(ap, uint64_t);
 		fcallp->io.count = va_arg(ap, uint32_t);
+#if 0
 		fcallp->io.data = l9p_calloc(1, fcallp->io.count);
 		if (fcallp->io.data)
 			bcopy(va_arg(ap, void*), fcallp->io.data, fcallp->io.count);
@@ -254,6 +234,9 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 			l9p_freefcall(fcallp);
 			error = ENOMEM;
 		}
+#else
+		abort();
+#endif
 		break;
 	default:
 		error = EINVAL;
@@ -270,19 +253,4 @@ p9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_fty
 
 	va_start(ap, tagp);
 	return vp9_msg(conn, fcallp, type, tagp, ap);
-}
-
-int
-packed_p9_msg(struct l9p_client_connection *conn, struct iovec *iovc, enum l9p_ftype type, uint16_t *tagp, ...)
-{
-	va_list ap;
-	union l9p_fcall fcall;
-	int error = 0;
-
-	va_start(ap, tagp);
-
-	error = vp9_msg(conn, &fcall, type, tagp, ap);
-	if (error == 0)
-		error = client_pack_message(conn, iovc, &fcall);
-	return (error);
 }

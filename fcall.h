@@ -351,7 +351,6 @@ struct l9p_f_io {
 	struct l9p_hdr hdr;
 	uint64_t offset; /* Tread, Twrite, Treaddir */
 	uint32_t count; /* Tread, Twrite, Rread, Treaddir, Rreaddir */
-	char *data; /* Twrite, Rread, Rreaddir */
 };
 
 struct l9p_f_rstat {

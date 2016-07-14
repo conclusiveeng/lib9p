@@ -53,6 +53,9 @@ struct l9p_backend {
 	int (*setattr)(void *, struct l9p_request *);
 	int (*xattrwalk)(void *, struct l9p_request *);
 	int (*xattrcreate)(void *, struct l9p_request *);
+	int (*xattrread)(void *, struct l9p_request *);
+	int (*xattrwrite)(void *, struct l9p_request *);
+	int (*xattrclunk)(void *, struct l9p_fid *);
 	int (*readdir)(void *, struct l9p_request *);
 	int (*fsync)(void *, struct l9p_request *);
 	int (*lock)(void *, struct l9p_request *);

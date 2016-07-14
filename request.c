@@ -750,7 +750,7 @@ l9p_dispatch_trename(struct l9p_request *req)
 {
 
 	return (l9p_2fid_dispatch(req, req->lr_req.trename.dfid,
-	    req->lr_conn->lc_server->ls_backend->mknod));
+	    req->lr_conn->lc_server->ls_backend->rename));
 }
 
 static int

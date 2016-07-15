@@ -801,13 +801,9 @@ l9p_dispatch_txattrwalk(struct l9p_request *req)
 	if (fid == NULL)
 		return (EBADF);
 
-	if (req->lr_req.txattrwalk.hdr.fid != req->lr_req.txattrwalk.newfid) {
-		newfid = l9p_connection_alloc_fid(conn,
-		    req->lr_req.txattrwalk.newfid);
-		if (newfid == NULL)
-			return (EBADF);
-	} else
-		newfid = fid;
+	newfid = l9p_connection_alloc_fid(conn, req->lr_req.txattrwalk.newfid);
+	if (newfid == NULL)
+		return (EBADF);
 
 	be = conn->lc_server->ls_backend;
 	if (be->xattrwalk == NULL)
@@ -819,17 +815,15 @@ l9p_dispatch_txattrwalk(struct l9p_request *req)
 
 	/*
 	 * Success/fail is similar to Twalk, except that we need
-	 * to set the xattr type bit in the new fid (even if the
-	 * new fid is the input fid).
+	 * to set the xattr type bit in the new fid.  It's also
+	 * much simpler since newfid is always a new fid.
 	 */
-	if (newfid != fid) {
-		if (error == 0)
-			l9p_fid_setvalid(newfid);
-		else
-			l9p_connection_remove_fid(conn, newfid);
-	}
-	if (error == 0)
+	if (error == 0) {
+		l9p_fid_setvalid(newfid);
 		l9p_fid_setxattr(newfid);
+	} else {
+		l9p_connection_remove_fid(conn, newfid);
+	}
 	return (error);
 }
 

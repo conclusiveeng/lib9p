@@ -1077,7 +1077,7 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 		sbuf_printf(sb, " valid=0x%016" PRIx64, mask);
 		l9p_describe_qid(" qid=", &fcall->rgetattr.qid, sb);
 		if (mask & L9PL_GETATTR_MODE)
-			sbuf_printf(sb, " mode=0x%08x", fcall->rgetattr.mode);
+			l9p_describe_lperm(" mode=", fcall->rgetattr.mode, sb);
 		if (mask & L9PL_GETATTR_UID)
 			l9p_describe_ugid(" uid=", fcall->rgetattr.uid, sb);
 		if (mask & L9PL_GETATTR_GID)
@@ -1123,7 +1123,7 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 		/* NB: tsetattr valid mask is only 32 bits, hence %08x */
 		sbuf_printf(sb, " valid=0x%08" PRIx64, mask);
 		if (mask & L9PL_SETATTR_MODE)
-			sbuf_printf(sb, " mode=0x%08x", fcall->tsetattr.mode);
+			l9p_describe_lperm(" mode=", fcall->tsetattr.mode, sb);
 		if (mask & L9PL_SETATTR_UID)
 			l9p_describe_ugid(" uid=", fcall->tsetattr.uid, sb);
 		if (mask & L9PL_SETATTR_GID)
@@ -1136,7 +1136,7 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 				    fcall->tsetattr.atime_sec,
 				    fcall->tsetattr.atime_nsec);
 			else
-				sbuf_printf(sb, " atime=now");
+				sbuf_cat(sb, " atime=now");
 		}
 		if (mask & L9PL_SETATTR_MTIME) {
 			if (mask & L9PL_SETATTR_MTIME_SET)
@@ -1144,8 +1144,10 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 				    fcall->tsetattr.mtime_sec,
 				    fcall->tsetattr.mtime_nsec);
 			else
-				sbuf_printf(sb, " mtime=now");
+				sbuf_cat(sb, " mtime=now");
 		}
+		if (mask & L9PL_SETATTR_CTIME)
+			sbuf_cat(sb, " ctime=now");
 		return;
 
 	case L9P_RSETATTR:

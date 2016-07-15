@@ -116,6 +116,7 @@ static const char *ftype_names[] = {
 	X(RENAME,	"rename"),
 	X(READLINK,	"readlink"),
 	X(GETATTR,	"getattr"),
+	X(SETATTR,	"setattr"),
 	X(XATTRWALK,	"xattrwalk"),
 	X(XATTRCREATE,	"xattrcreate"),
 	X(READDIR,	"readdir"),
@@ -834,7 +835,16 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 
 	if (type < L9P__FIRST || type >= L9P__LAST_PLUS_1 ||
 	    ftype_names[type - L9P__FIRST] == NULL) {
-		sbuf_printf(sb, "<unknown request %d> tag=%d", type,
+		char *rr;
+
+		/*
+		 * Can't say for sure that this distinction --
+		 * an even number is a request, an odd one is
+		 * a response -- will be maintained forever,
+		 * but it's good enough for now.
+		 */
+		rr = (type & 1) != 0 ? "response" : "request";
+		sbuf_printf(sb, "<unknown %s %d> tag=%d", rr, type,
 		    fcall->hdr.tag);
 	} else {
 		sbuf_printf(sb, "%s tag=%d", ftype_names[type - L9P__FIRST],

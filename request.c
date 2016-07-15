@@ -397,17 +397,17 @@ l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
  * Generic handler for operations that require valid fid.
  *
  * Decodes header fid to file, then calls backend function
- * (*be)(softc, req).  Returns EBADF or ENOSYS if the fid is
- * invalid or the backend function is not there.
+ * (*be)(softc, req).  Returns given <err> if the fid is invalid
+ * or ENOSYS if the backend function is not there.
  */
-static inline int l9p_fid_dispatch(struct l9p_request *req,
+static inline int l9p_fid_dispatch(struct l9p_request *req, int err,
     int (*be)(void *, struct l9p_request *))
 {
 	struct l9p_connection *conn = req->lr_conn;
 
 	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (req->lr_fid == NULL)
-		return (EIO);
+		return (err);
 
 	if (be == NULL)
 		return (ENOSYS);
@@ -421,17 +421,17 @@ static inline int l9p_fid_dispatch(struct l9p_request *req,
  * corresponding openfile goes into req->lr_f2.
  */
 static inline int l9p_2fid_dispatch(struct l9p_request *req, uint32_t fid2,
-    int (*be)(void *, struct l9p_request *))
+    int err, int (*be)(void *, struct l9p_request *))
 {
 	struct l9p_connection *conn = req->lr_conn;
 
 	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (req->lr_fid == NULL)
-		return (EBADF);
+		return (err);
 
 	req->lr_fid2 = ht_find(&conn->lc_files, fid2);
 	if (req->lr_fid2 == NULL)
-		return (EBADF);
+		return (err);
 
 	if (be == NULL)
 		return (ENOSYS);
@@ -451,7 +451,7 @@ static inline int l9p_read_dispatch(struct l9p_request *req,
 
 	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (!req->lr_fid)
-		return (EBADF);
+		return (EINVAL);
 
 	/*
 	 * Adjust so that writing messages (packing data) starts
@@ -569,7 +569,7 @@ l9p_dispatch_tclunk(struct l9p_request *req)
 
 	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (fid == NULL)
-		return (EIO);
+		return (ENOENT);
 
 	be = conn->lc_server->ls_backend;
 	l9p_fid_unsetvalid(fid);
@@ -610,14 +610,14 @@ static int
 l9p_dispatch_tcreate(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->create));
+	return (l9p_fid_dispatch(req, EINVAL, req->lr_conn->lc_server->ls_backend->create));
 }
 
 static int
 l9p_dispatch_topen(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->open));
+	return (l9p_fid_dispatch(req, EINVAL, req->lr_conn->lc_server->ls_backend->open));
 }
 
 static int
@@ -637,7 +637,7 @@ l9p_dispatch_tremove(struct l9p_request *req)
 
 	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (fid == NULL)
-		return (EIO);
+		return (EINVAL);
 
 	be = conn->lc_server->ls_backend;
 	l9p_fid_unsetvalid(fid);
@@ -652,7 +652,7 @@ static int
 l9p_dispatch_tstat(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->stat));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->stat));
 }
 
 static int
@@ -665,13 +665,13 @@ l9p_dispatch_twalk(struct l9p_request *req)
 
 	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (fid == NULL)
-		return (EBADF);
+		return (ENOENT);
 
 	if (req->lr_req.twalk.hdr.fid != req->lr_req.twalk.newfid) {
 		newfid = l9p_connection_alloc_fid(conn,
 		    req->lr_req.twalk.newfid);
 		if (newfid == NULL)
-			return (EBADF);
+			return (EINVAL);
 	} else
 		newfid = fid;
 
@@ -700,7 +700,7 @@ l9p_dispatch_twrite(struct l9p_request *req)
 
 	req->lr_fid = ht_find(&conn->lc_files, req->lr_req.twalk.hdr.fid);
 	if (req->lr_fid == NULL)
-		return (EBADF);
+		return (EINVAL);
 
 	if (!conn->lc_server->ls_backend->write)
 		return (ENOSYS);
@@ -722,49 +722,49 @@ static int
 l9p_dispatch_twstat(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->wstat));
+	return (l9p_fid_dispatch(req, EINVAL, req->lr_conn->lc_server->ls_backend->wstat));
 }
 
 static int
 l9p_dispatch_tstatfs(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->statfs));
+	return (l9p_fid_dispatch(req, EINVAL, req->lr_conn->lc_server->ls_backend->statfs));
 }
 
 static int
 l9p_dispatch_tlopen(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lopen));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->lopen));
 }
 
 static int
 l9p_dispatch_tlcreate(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lcreate));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->lcreate));
 }
 
 static int
 l9p_dispatch_tsymlink(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->symlink));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->symlink));
 }
 
 static int
 l9p_dispatch_tmknod(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->mknod));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->mknod));
 }
 
 static int
 l9p_dispatch_trename(struct l9p_request *req)
 {
 
-	return (l9p_2fid_dispatch(req, req->lr_req.trename.dfid,
+	return (l9p_2fid_dispatch(req, req->lr_req.trename.dfid, ENOENT,
 	    req->lr_conn->lc_server->ls_backend->rename));
 }
 
@@ -772,21 +772,21 @@ static int
 l9p_dispatch_treadlink(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->readlink));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->readlink));
 }
 
 static int
 l9p_dispatch_tgetattr(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->getattr));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->getattr));
 }
 
 static int
 l9p_dispatch_tsetattr(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->setattr));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->setattr));
 }
 
 static int
@@ -799,11 +799,11 @@ l9p_dispatch_txattrwalk(struct l9p_request *req)
 
 	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (fid == NULL)
-		return (EBADF);
+		return (ENOENT);
 
 	newfid = l9p_connection_alloc_fid(conn, req->lr_req.txattrwalk.newfid);
 	if (newfid == NULL)
-		return (EBADF);
+		return (EINVAL);
 
 	be = conn->lc_server->ls_backend;
 	if (be->xattrwalk == NULL)
@@ -835,9 +835,13 @@ l9p_dispatch_txattrcreate(struct l9p_request *req)
 	struct l9p_fid *fid;
 	int error;
 
+	/*
+	 * Curiously, qemu 9pfs uses ENOENT for a bad txattrwalk
+	 * fid, but EINVAL for txattrcreate (so we do too).
+	 */
 	fid = ht_find(&conn->lc_files, req->lr_req.hdr.fid);
 	if (fid == NULL)
-		return (EIO);
+		return (EINVAL);
 
 	be = conn->lc_server->ls_backend;
 	if (be->xattrcreate == NULL)
@@ -864,28 +868,28 @@ static int
 l9p_dispatch_tfsync(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->fsync));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->fsync));
 }
 
 static int
 l9p_dispatch_tlock(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->lock));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->lock));
 }
 
 static int
 l9p_dispatch_tgetlock(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->getlock));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->getlock));
 }
 
 static int
 l9p_dispatch_tlink(struct l9p_request *req)
 {
 
-	return (l9p_2fid_dispatch(req, req->lr_req.tlink.dfid,
+	return (l9p_2fid_dispatch(req, req->lr_req.tlink.dfid, ENOENT,
 	    req->lr_conn->lc_server->ls_backend->link));
 }
 
@@ -893,14 +897,14 @@ static int
 l9p_dispatch_tmkdir(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->mkdir));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->mkdir));
 }
 
 static int
 l9p_dispatch_trenameat(struct l9p_request *req)
 {
 
-	return (l9p_2fid_dispatch(req, req->lr_req.trenameat.newdirfid,
+	return (l9p_2fid_dispatch(req, req->lr_req.trenameat.newdirfid, ENOENT,
 	    req->lr_conn->lc_server->ls_backend->renameat));
 }
 
@@ -908,5 +912,5 @@ static int
 l9p_dispatch_tunlinkat(struct l9p_request *req)
 {
 
-	return (l9p_fid_dispatch(req, req->lr_conn->lc_server->ls_backend->unlinkat));
+	return (l9p_fid_dispatch(req, ENOENT, req->lr_conn->lc_server->ls_backend->unlinkat));
 }

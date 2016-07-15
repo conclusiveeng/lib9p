@@ -33,7 +33,7 @@
 /*
  * Data structure for a fid.  All active fids in one session
  * are stored in a hash table; the hash table provides the
- * iterator to process them.  (See also l9p_connection, below.)
+ * iterator to process them.  (See also l9p_connection in lib9p.h.)
  *
  * The back-end code has additional data per fid, found via
  * lo_aux.  Currently this is allocated with a separate calloc().

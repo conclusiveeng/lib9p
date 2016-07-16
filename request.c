@@ -192,7 +192,9 @@ l9p_dispatch_request(struct l9p_request *req)
 	for (i = 0; i < n; i++) {
 		if (req->lr_req.hdr.type == handlers[i].type) {
 			error = handlers[i].handler(req);
-			l9p_respond(req, error);
+			if (error != EJUSTRETURN)
+				l9p_respond(req, error);
+
 			return;
 		}
 	}

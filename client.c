@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <string.h>
 #include <strings.h>
 #include <stdarg.h>
 #include <sys/param.h>
@@ -87,7 +88,8 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 	union l9p_fcall *send, *recv;
 	int error = 0;
 	struct l9p_client_connection *conn = msg->conn;
-
+	enum l9p_qid_type expected;
+	
 	bzero(&msg->message_data, sizeof(msg->message_data));
 	bzero(&msg->response, sizeof(msg->response));
 	bzero(&msg->response_data, sizeof(msg->response_data));
@@ -102,6 +104,7 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 	puts(sbuf_data(sb));
 	sbuf_clear(sb);
 
+	expected = send->hdr.type + 1;
 	error = client_pack_message(msg);
 	if (error)
 		goto done;
@@ -120,6 +123,9 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 	if (msg->response.hdr.type == L9P_RERROR)
 		error = (int)(msg->response.error.errnum);
 
+	if (msg->response.hdr.type != expected)
+		error = EINVAL;
+	
 done:
 	if (sb)
 		sbuf_delete(sb);
@@ -130,7 +136,7 @@ done:
  * Construct a l9p_message from the parameters.
  */
 int
-vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ftype type, uint16_t *tagp, va_list ap)
+vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ftype type, va_list ap)
 {
 	int error = 0;
 	size_t indx = 0;
@@ -145,24 +151,21 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 	 * change.
 	 */
 	if (type != L9P_TVERSION) {
-		*tagp = conn->get_tag(conn);
+		fcallp->hdr.tag = conn->get_tag(conn);
 		fcallp->hdr.type = type;
-		fcallp->hdr.tag = *tagp;
 		fcallp->hdr.fid = va_arg(ap, uint32_t);
 	}
-#define STD(f, ty, ta, va) (void)0
 
 	switch (type) {
 	case L9P_TVERSION:
 		maxsize = (uint32_t)va_arg(ap, int);
 		version_string = va_arg(ap, char *);
 		fcallp->version.hdr.type = type;
-		fcallp->version.hdr.tag = *tagp = NOTAG;	// Override the normal case
+		fcallp->version.hdr.tag = NOTAG;	// Override the normal case
 		fcallp->version.msize = maxsize;
 		fcallp->version.version = version_string;
 		break;
 	case L9P_TATTACH:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->tattach.afid = va_arg(ap, uint32_t);
 		fcallp->tattach.uname = va_arg(ap, char*);
 		fcallp->tattach.aname = va_arg(ap, char*);
@@ -170,18 +173,15 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 			fcallp->tattach.n_uname = va_arg(ap, uint32_t);
 		break;
 	case L9P_TOPEN:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->topen.mode = (uint8_t)va_arg(ap, unsigned int);
 		fcallp->topen.name = NULL;
 		break;
 	case L9P_TCREATE:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->topen.name = strdup(va_arg(ap, char*));
 		fcallp->topen.perm = va_arg(ap, uint32_t);
 		fcallp->topen.mode = (uint8_t)va_arg(ap, unsigned int);
 		break;
 	case L9P_TWALK:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->twalk.newfid = va_arg(ap, uint32_t);
 		error = 0;
 		while ((twalk_name = va_arg(ap, char *)) != NULL) {
@@ -207,23 +207,18 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 	case L9P_TCLUNK:
 	case L9P_TREMOVE:
 	case L9P_TSTAT:
-		STD(fcallp, type, *tagp, ap);
 		break;
 	case L9P_TWSTAT:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->twstat.stat = *va_arg(ap, struct l9p_stat *);
 		break;
 	case L9P_TFLUSH:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->tflush.oldtag = (uint16_t)va_arg(ap, int);
 		break;
 	case L9P_TREAD:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->io.offset = va_arg(ap, uint64_t);
 		fcallp->io.count = va_arg(ap, uint32_t);
 		break;
 	case L9P_TWRITE:
-		STD(fcallp, type, *tagp, ap);
 		fcallp->io.offset = va_arg(ap, uint64_t);
 		fcallp->io.count = va_arg(ap, uint32_t);
 #if 0
@@ -247,10 +242,10 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 }
 
 int
-p9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ftype type, uint16_t *tagp, ...)
+p9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ftype type, ...)
 {
 	va_list ap;
 
-	va_start(ap, tagp);
-	return vp9_msg(conn, fcallp, type, tagp, ap);
+	va_start(ap, type);
+	return vp9_msg(conn, fcallp, type, ap);
 }

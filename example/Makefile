@@ -5,7 +5,7 @@ MAN=
 
 CFLAGS=	-pthread -g -O0
 
-LDFLAGS=-L.. -static
-LDADD=	-l9p -lsbuf
+LDFLAGS=-L.. 
+LDADD=	../lib9p.a -lsbuf
 
 .include <bsd.progs.mk>

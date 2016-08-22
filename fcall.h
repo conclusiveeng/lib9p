@@ -32,7 +32,10 @@
 #ifndef LIB9P_FCALL_H
 #define LIB9P_FCALL_H
 
-#include <stdint.h>
+#include <sys/types.h>
+#ifndef _KERNEL
+# include <stdint.h>
+#endif
 
 #define L9P_MAX_WELEM   256
 

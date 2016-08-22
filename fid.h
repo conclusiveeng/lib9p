@@ -28,7 +28,9 @@
 #ifndef LIB9P_FID_H
 #define LIB9P_FID_H
 
-#include <stdbool.h>
+#ifndef _KERNEL
+# include <stdbool.h>
+#endif
 
 /*
  * Data structure for a fid.  All active fids in one session

@@ -57,6 +57,62 @@ static ssize_t l9p_pustrings(struct l9p_message *, uint16_t *, char **, size_t);
 static ssize_t l9p_puqid(struct l9p_message *, struct l9p_qid *);
 static ssize_t l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q);
 
+#ifdef _KERNEL
+/*
+ * Transfer data to/from a uio object.
+ * Returns 0 on success, an error otherwise.  Transfers count
+ * bytes at most.
+ *
+ * Since there is no iovec<->iovec routine available,
+ * this instead iterates through all of the segments in
+ * msg->lm_iov.  msg->lm_mode is IGNORED; direction is
+ * based on uio->uio_rw.
+ */
+int
+l9p_uio_io(struct l9p_message *msg, struct uio *uio, size_t count)
+{
+	size_t amt;
+	
+	assert(msg != NULL);
+	assert(uio != NULL);
+
+	if (msg->lm_cursor_iov >= L9P_MAX_IOV)
+		return (ERANGE);
+	if (msg->lm_cursor_iov >= msg->lm_niov)
+		return (ERANGE);
+	
+	while (count) {
+		int error;
+		struct iovec *iovc = msg->lm_iov + msg->lm_cursor_iov;
+		void *base = iovc->iov_base + msg->lm_cursor_offset;
+		size_t space = iovc->iov_len - msg->lm_cursor_offset;
+
+		/*
+		 * We first get the minimum of the amount left in
+		 * the current segment, or uio->resid, or the amount
+		 * requested to transfer (count).
+		 */
+		amt = MIN(space, uio->uio_resid);
+		amt = MIN(amt, count);
+
+		error = uiomove(base, amt, uio);
+		if (error)
+			return (error);
+		msg->lm_cursor_offset += amt;
+		count -= amt;
+		if (msg->lm_cursor_offset == iovc->iov_len) {
+			// Need to advance to next iovc
+			msg->lm_cursor_iov++;
+			msg->lm_cursor_offset = 0;
+			if (msg->lm_cursor_iov >= msg->lm_niov)
+				break;
+		}
+	}
+	
+	return (0);
+}
+#endif /* _KERNEL */
+
 /*
  * Transfer data from incoming request, or to outgoing response,
  * using msg to track position and direction within request/response.

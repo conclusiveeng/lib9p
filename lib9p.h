@@ -29,11 +29,14 @@
 #ifndef LIB9P_LIB9P_H
 #define LIB9P_LIB9P_H
 
-#include <stdio.h>
+#ifndef _KERNEL
+# include <stdio.h>
+# include <pthread.h>
+#endif
+
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <sys/uio.h>
-#include <pthread.h>
 
 #if defined(__FreeBSD__)
 #include <sys/sbuf.h>
@@ -187,6 +190,10 @@ void l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
 void l9p_seek_iov(struct iovec *iov1, size_t niov1, struct iovec *iov2,
     size_t *niov2, size_t seek);
 size_t l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length);
+#ifdef _KERNEL
+int l9p_uio_io(struct l9p_message *, struct uio *, size_t);
+#endif
+
 ssize_t l9p_iov_io(struct l9p_message *, void *, size_t);
 int l9p_msg_add_iovec(struct l9p_message *, struct iovec *);
 void l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,

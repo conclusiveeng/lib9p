@@ -1,6 +1,12 @@
 #ifndef _9PCLIENT_H
 # define _9PCLIENT_H
 
+# ifdef _KERNEL
+#  include <machine/stdarg.h>
+# else
+#  include <stdarg.h>
+# endif
+
 // May need to change this
 # include "lib9p.h"
 # include "fid.h"
@@ -21,7 +27,7 @@ struct l9p_client_rpc {
 	union l9p_fcall		response;
 	struct l9p_message	response_data;
 	struct l9p_client_connection	*conn;
-	void		*context;
+	void		*client_context;
 };
 
 /*
@@ -56,8 +62,7 @@ int p9_send_and_reply(struct l9p_client_rpc *);
 /*
  * Functions to create a p9 message.
  */
-int vp9_msg(struct l9p_client_connection *, union l9p_fcall *msg, enum l9p_ftype type, uint16_t *tagp, va_list ap);
-int p9_msg(struct l9p_client_connection *, union l9p_fcall *msg, enum l9p_ftype type, uint16_t *tagp, ...);
-int packed_p9_msg(struct l9p_client_connection *, struct iovec *iovc, enum l9p_ftype type, uint16_t *tagp, ...);
+int vp9_msg(struct l9p_client_connection *, union l9p_fcall *msg, enum l9p_ftype type, va_list ap);
+int p9_msg(struct l9p_client_connection *, union l9p_fcall *msg, enum l9p_ftype type, ...);
 
 #endif /* _9PCLIENT_H */

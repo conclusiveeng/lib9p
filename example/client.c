@@ -277,7 +277,7 @@ main(int ac, char *av[])
 		char *version = "9P2000.u"; // or 9P2000.u
 		struct sbuf *sb = sbuf_new_auto();
 
-		rv = p9_msg(&conn, &rpc.message, L9P_TVERSION, &tag, 1024 * 1024, version);
+		rv = p9_msg(&conn, &rpc.message, L9P_TVERSION, 1024 * 1024, version);
 		if (rv) {
 			errc(1, rv, "Could not create p9 message");
 		}
@@ -302,7 +302,7 @@ main(int ac, char *av[])
 
 		conn.root_fid = conn.get_fid(&conn);
 
-		rv = p9_msg(&conn, &rpc.message, L9P_TATTACH, &tag, conn.root_fid, NOFID, "sef", "", (uint32_t)geteuid());
+		rv = p9_msg(&conn, &rpc.message, L9P_TATTACH, conn.root_fid, NOFID, "sef", "", (uint32_t)geteuid());
 		if (rv) {
 			errc(1, rv, "Could not create p9 attach message");
 		}
@@ -318,7 +318,7 @@ main(int ac, char *av[])
 
 		l9p_freefcall(&rpc.response);
 
-		rv = p9_msg(&conn, &rpc.message, L9P_TSTAT, &tag, conn.root_fid);
+		rv = p9_msg(&conn, &rpc.message, L9P_TSTAT, conn.root_fid);
 		if (rv) {
 			errc(1, rv, "Could not pack p9 tstat message");
 		}
@@ -336,7 +336,7 @@ main(int ac, char *av[])
 		{
 			uint32_t root_read = conn.get_fid(&conn);
 			// Let's try to open up the root directory for reading
-			rv = p9_msg(&conn, &rpc.message, L9P_TWALK, &tag, conn.root_fid, root_read, NULL);
+			rv = p9_msg(&conn, &rpc.message, L9P_TWALK, conn.root_fid, root_read, NULL);
 			if (rv == 0)
 				rv = p9_send_and_reply(&rpc);
 			if (rv == 0) {
@@ -344,7 +344,7 @@ main(int ac, char *av[])
 				puts(sbuf_data(sb));
 				sbuf_clear(sb);
 				l9p_freefcall(&rpc.response);
-				rv = p9_msg(&conn, &rpc.message, L9P_TOPEN, &tag, root_read, L9P_OREAD);
+				rv = p9_msg(&conn, &rpc.message, L9P_TOPEN, root_read, L9P_OREAD);
 			}
 			if (rv == 0) {
 				rv = p9_send_and_reply(&rpc);
@@ -355,7 +355,7 @@ main(int ac, char *av[])
 				sbuf_clear(sb);
 				l9p_freefcall(&rpc.message);
 				l9p_freefcall(&rpc.response);
-				rv = p9_msg(&conn, &rpc.message, L9P_TREAD, &tag, root_read, (uint64_t)0, 1024);
+				rv = p9_msg(&conn, &rpc.message, L9P_TREAD, root_read, (uint64_t)0, 1024);
 			}
 			if (rv == 0) {
 				rv = p9_send_and_reply(&rpc);
@@ -374,7 +374,7 @@ main(int ac, char *av[])
 				}
 				l9p_freefcall(&rpc.response);
 			}
-			rv = p9_msg(&conn, &rpc.message, L9P_TCLUNK, &tag, root_read);
+			rv = p9_msg(&conn, &rpc.message, L9P_TCLUNK, root_read);
 			rv = p9_send_and_reply(&rpc);
 			conn.release_fid(&conn, root_read);
 		}
@@ -383,7 +383,7 @@ main(int ac, char *av[])
 
 #define TESTFILE "testfile"
 
-		rv = p9_msg(&conn, &rpc.message, L9P_TWALK, &tag, conn.root_fid, new_fid, TESTFILE, NULL);
+		rv = p9_msg(&conn, &rpc.message, L9P_TWALK, conn.root_fid, new_fid, TESTFILE, NULL);
 		if (rv) {
 			errc(1, rv, "Could not create twalk message");
 		}
@@ -399,7 +399,7 @@ main(int ac, char *av[])
 
 		l9p_freefcall(&rpc.response);
 
-		rv = p9_msg(&conn, &rpc.message, L9P_TOPEN, &tag, new_fid, L9P_OREAD);
+		rv = p9_msg(&conn, &rpc.message, L9P_TOPEN, new_fid, L9P_OREAD);
 		if (rv) {
 			errc(1, rv, "Could not create p9 topen message");
 		}

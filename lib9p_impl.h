@@ -28,8 +28,10 @@
 #ifndef LIB9P_LIB9P_IMPL_H
 #define LIB9P_LIB9P_IMPL_H
 
-#include <stdio.h>
-#include <stdlib.h>
+#ifndef _KERNEL
+# include <stdio.h>
+# include <stdlib.h>
+#endif
 
 #ifndef _KERNEL
 static inline void *
@@ -79,6 +81,12 @@ l9p_free(void *ptr)
 {
 	free(ptr);
 }
+
+#else
+extern void *l9p_malloc(size_t);
+extern void *l9p_calloc(size_t, size_t);
+extern void *l9p_realloc(void *, size_t);
+extern void l9p_free(void *);
 
 #endif /* _KERNEL */
 

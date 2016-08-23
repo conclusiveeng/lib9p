@@ -56,6 +56,13 @@ __FBSDID("$FreeBSD$");
 #include "p9fs_subr.h"
 #include "../lib9p.h"
 
+static void
+init_p9rpc(struct l9p_client_rpc *msg, struct p9fs_session *p9s)
+{
+	msg->conn = &p9s->connection;
+	msg->client_context = p9s;
+}
+
 /*
  * version - negotiate protocol version
  *
@@ -85,8 +92,10 @@ p9fs_client_version(struct p9fs_session *p9s)
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
-	
+	init_p9rpc(msg, p9s);
+	// We have to do this for the initial message
+	if (msg->conn->lc_max_io_size == 0)
+		msg->conn->lc_max_io_size = max_size;
 retry:
 	error = p9_msg(&p9s->connection, &msg->message, L9P_TVERSION, max_size, UN_VERS);
 	if (error)
@@ -97,15 +106,17 @@ retry:
 	if (error == EMSGSIZE)
 		goto retry;
 	
-	if (error)
+	if (error) {
 		goto done;
-
+	}
+	
 	if (strcmp(msg->response.version.version, UN_VERS) != 0) {
 		printf("Remote offered incompatible version '%s'\n",
 		       msg->response.version.version);
 		error = EINVAL;
+	} else {
+		msg->conn->lc_max_io_size = msg->response.version.msize;
 	}
-
 done:
 	if (msg) {
 		l9p_freefcall(&msg->response);
@@ -158,7 +169,7 @@ p9fs_client_attach(struct p9fs_session *p9s)
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
+	init_p9rpc(msg, p9s);
 
 retry:
 	error = p9_msg(&p9s->connection, &msg->message, L9P_TATTACH,
@@ -206,7 +217,7 @@ p9fs_client_clunk(struct p9fs_session *p9s, uint32_t fid)
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
+	init_p9rpc(msg, p9s);
 	
 retry:
 	error = p9_msg(&p9s->connection, &msg->message, L9P_TCLUNK, fid);
@@ -325,7 +336,7 @@ p9fs_client_open(struct p9fs_session *p9s, uint32_t fid, int mode)
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
+	init_p9rpc(msg, p9s);
 	
 retry:
 	/* Convert VOP_OPEN() mode to 9P2000 mode[1]. */
@@ -412,8 +423,6 @@ p9fs_client_read(struct p9fs_session *p9s, uint32_t fid,
 	uint64_t off;
 	uint32_t count;
 
-	printf("%s(%p, %u, %p, uio = { %ld, %d }\n", __FUNCTION__, p9s, fid, iocb, uio ? uio->uio_offset : -1, uio ? uio->uio_rw : -1);
-
 	if (iocb == NULL || uio->uio_offset < 0 || uio->uio_rw != UIO_READ)
 		return (EINVAL);
 
@@ -421,14 +430,12 @@ p9fs_client_read(struct p9fs_session *p9s, uint32_t fid,
 	CTASSERT(P9_MSG_MAX <= UINT32_MAX);
 	count = MIN(P9_MSG_MAX, uio->uio_resid);
 	if (count == 0) {
-		printf("%s(%d):  count == 0\n", __FUNCTION__, __LINE__);
 		return (0);
 	}
-	printf("%s(%d):  Made it here...\n", __FUNCTION__, __LINE__);
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
+	init_p9rpc(msg, p9s);
 	
 retry:
 	error = p9_msg(&p9s->connection, &msg->message, L9P_TREAD, fid, off, count);
@@ -612,7 +619,7 @@ p9fs_client_stat(struct p9fs_session *p9s, uint32_t fid, struct vattr *vap)
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
+	init_p9rpc(msg, p9s);
 	
 retry:
 	error = p9_msg(&p9s->connection, &msg->message, L9P_TSTAT, fid);
@@ -698,7 +705,7 @@ p9fs_client_wstat(struct p9fs_session *p9s, uint32_t fid, struct vattr *vap)
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
+	init_p9rpc(msg, p9s);
 	
 	// Do some setup first
 	p9stat.length = vap->va_size;
@@ -778,7 +785,7 @@ p9fs_client_walk(struct p9fs_session *p9s, uint32_t fid, uint32_t newfid,
 	msg = l9p_calloc(1, sizeof(*msg));
 	if (msg == NULL)
 		return (ENOMEM);
-	msg->conn = &p9s->connection;
+	init_p9rpc(msg, p9s);
 	
 retry:
 	error = p9_msg(&p9s->connection, &msg->message, L9P_TWALK, fid, newfid, namestr);

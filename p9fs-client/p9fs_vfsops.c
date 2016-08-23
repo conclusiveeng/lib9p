@@ -116,6 +116,8 @@ p9fs_mount_parse_opts(struct mount *mp)
 	}
 	conn->context = sock;
 	sock->p9s_sockaddr_len = sockaddr_len;
+	sock->p9s_socktype = SOCK_STREAM;
+	sock->p9s_proto = IPPROTO_TCP;
 	bcopy(saddr, &sock->p9s_sockaddr, sockaddr_len);
 	conn->send_msg = &p9fs_msg_send;
 	conn->recv_msg = &p9fs_msg_recv;

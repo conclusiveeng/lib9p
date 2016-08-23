@@ -75,11 +75,19 @@ p9fs_msg_send(struct l9p_client_rpc *msg)
 	struct uio uio;
 	struct mbuf *control = NULL;
 	struct thread *td = curthread;
-	struct p9fs_session *p9s = msg->client_context;
-	struct l9p_client_connection *conn = &p9s->connection;
-	struct l9p_socket_context *socket_ctx = conn->context;
+	struct p9fs_session *p9s;
+	struct l9p_client_connection *conn;
+	struct l9p_socket_context *socket_ctx;
 	uint16_t tag;
+
+	KASSERT(msg, __FUNCTION__ ": msg is NULL?!?!?!?");
 	
+	p9s = msg->client_context;
+	conn = &p9s->connection;
+
+	KASSERT(conn->context, __FUNCTION__ ": conn->context is null, nitwit"); 
+
+	socket_ctx = conn->context;
 	tag = msg->tag;
 	
 	uio.uio_iov = msg->message_data.lm_iov;
@@ -101,7 +109,6 @@ p9fs_msg_send(struct l9p_client_rpc *msg)
 	flags = 0;
 	error = sosend(socket_ctx->p9s_sock, &socket_ctx->p9s_sockaddr, &uio, NULL, control,
 		       flags, td);
-	printf("%s(%d):  error = %d\n", __FUNCTION__, __LINE__, error);
 	if (error == EMSGSIZE) {
 		SOCKBUF_LOCK(&socket_ctx->p9s_sock->so_snd);
 		sbwait(&socket_ctx->p9s_sock->so_snd);
@@ -110,7 +117,6 @@ p9fs_msg_send(struct l9p_client_rpc *msg)
 
 	mtx_lock(&p9s->p9s_lock);
 
-	printf("%s(%d):  error = %d\n", __FUNCTION__, __LINE__, error);
 	/* Ensure any response is disposed of in case of a local error. */
 
 	p9s->p9s_threads--;
@@ -143,21 +149,32 @@ p9fs_msg_recv(struct l9p_client_rpc *msg)
 	struct l9p_socket_context *socket_ctx = conn->context;
 	struct p9fs_recv *p9r = &p9s->p9s_recv;
 	struct uio uio = { 0 };
-	int error = 0, rcvflag;
+	int error = 0, rcvflag = 0;
 	struct sockaddr **psa = NULL;
 	uint32_t record_length = 0;
 	struct iovec reclen_iovec = { .iov_len = sizeof(record_length), .iov_base = &record_length };
 	uint8_t *data_buffer = NULL;
 
+	bzero(&msg->response_data, sizeof(msg->response_data));
+	
 	p9r->p9r_soupcalls++;
 again:
 	/* Is the socket still waiting for a new record's size? */
 	if (p9r->p9r_resid == 0) {
-		if (sbavail(&socket_ctx->p9s_sock->so_rcv) < sizeof (p9r->p9r_resid)
-		 || (socket_ctx->p9s_sock->so_rcv.sb_state & SBS_CANTRCVMORE) != 0
-		 || socket_ctx->p9s_sock->so_error != 0)
+#if 0
+		if (sbavail(&socket_ctx->p9s_sock->so_rcv) < sizeof (p9r->p9r_resid)) {
+			printf("%s(%d): sbavail = %d\n", __FUNCTION__, __LINE__, sbavail(&socket_ctx->p9s_sock->so_rcv));
 			goto out;
-
+		}
+#endif
+		if ((socket_ctx->p9s_sock->so_rcv.sb_state & SBS_CANTRCVMORE) != 0) {
+			printf("%s(%d):  bailing\n", __FUNCTION__, __LINE__);
+			goto out;
+		}
+		if (socket_ctx->p9s_sock->so_error != 0) {
+			printf("%s(%d):  bailing\n", __FUNCTION__, __LINE__);
+			goto out;
+		}
 		uio.uio_resid = sizeof (p9r->p9r_resid);
 		uio.uio_iov = &reclen_iovec;
 		uio.uio_iovcnt = 1;
@@ -170,10 +187,11 @@ again:
 	}
 
 	/* Drop the sockbuf lock and do the soreceive call. */
-	SOCKBUF_UNLOCK(&socket_ctx->p9s_sock->so_rcv);
-	rcvflag = MSG_DONTWAIT | MSG_SOCALLBCK;
+//	SOCKBUF_UNLOCK(&socket_ctx->p9s_sock->so_rcv);
+//	rcvflag = MSG_DONTWAIT | MSG_SOCALLBCK;
+	rcvflag = MSG_WAITALL;
 	error = soreceive(socket_ctx->p9s_sock, psa, &uio, NULL, NULL, &rcvflag);
-	SOCKBUF_LOCK(&socket_ctx->p9s_sock->so_rcv);
+//	SOCKBUF_LOCK(&socket_ctx->p9s_sock->so_rcv);
 
 	/* Process errors from soreceive(). */
 	if (error == EWOULDBLOCK)
@@ -194,15 +212,15 @@ again:
 			goto out;
 		}
 		bcopy(&record_length, data_buffer, sizeof(record_length));
-		msg->response_data.lm_iov[0].iov_base = data_buffer;
-		msg->response_data.lm_iov[0].iov_len = record_length;
+		msg->response_data.lm_iov[0].iov_base = data_buffer + sizeof(record_length);
+		msg->response_data.lm_iov[0].iov_len = record_length - sizeof(record_length);
 		uio.uio_iov = msg->response_data.lm_iov;
 		uio.uio_iovcnt = 1;
 		uio.uio_offset = sizeof(record_length);
 		uio.uio_segflg = UIO_SYSSPACE;
 		uio.uio_rw = UIO_READ;
 		uio.uio_resid = record_length - sizeof(record_length);
-		p9r->p9r_resid = p9r->p9r_size - sizeof (p9r->p9r_size);
+		p9r->p9r_resid = uio.uio_resid;
 		/* Record size is known now; retrieve the rest. */
 		goto again;
 	}
@@ -210,10 +228,22 @@ again:
 	/* If we have a complete record, match it to a request via tag. */
 	p9r->p9r_resid = uio.uio_resid;
 	if (p9r->p9r_resid == 0) {
-		uint16_t tag;
+		uint16_t tag = 0;
+		size_t indx;
+		uint8_t *ptr;
 
+		// Now we change the pointers back
+		msg->response_data.lm_iov[0].iov_base = data_buffer;
+		msg->response_data.lm_iov[0].iov_len = record_length;
+		msg->response_data.lm_niov = 1;
+		
+#if 0
+		for (indx = 0, ptr = data_buffer; indx < record_length; indx++)
+			printf("%02x ", *ptr++);
+		printf("\n");
+#endif		
 		// Should deal with byte order!
-		bcopy(data_buffer + offsetof(struct l9p_hdr, tag),
+		bcopy(data_buffer + sizeof(record_length) + sizeof(uint8_t),
 		      &tag, sizeof(tag));
 
 		if (tag != msg->tag) {
@@ -222,7 +252,6 @@ again:
 			p9r->p9r_msg = NULL;
 		}
 	}
-
 out:
 	p9r->p9r_soupcalls--;
 	return (error);
@@ -244,10 +273,7 @@ p9fs_init_session(struct p9fs_session *p9s)
 	 */
 	p9s->connection.fids = new_unrhdr(1, INT_MAX - 1, &p9s->p9s_lock);
 	p9s->connection.tags = new_unrhdr(1, UINT16_MAX - 1, &p9s->p9s_lock);
-	// Need to set this up properly
-	// I need to properly refactor the client stuff here
-	//p9s->p9s_socktype = SOCK_STREAM;
-	//p9s->p9s_proto = IPPROTO_TCP;
+
 }
 
 void
@@ -314,7 +340,7 @@ p9fs_reltag(struct l9p_client_connection *conn, uint16_t tag)
 void *
 l9p_malloc(size_t sz)
 {
-	return malloc(sz, M_P9FS, M_WAITOK | M_ZERO);
+	return malloc(sz, M_P9FS, M_WAITOK);
 }
 void *
 l9p_calloc(size_t n, size_t sz)
@@ -325,4 +351,15 @@ void
 l9p_free(void *ptr)
 {
 	free(ptr, M_P9FS);
+}
+char *
+l9p_strdup(char *str)
+{
+	char *retval = NULL;
+	size_t len = strlen(str) + 1;
+	retval = l9p_malloc(len);
+	if (retval) {
+		strcpy(retval, str);
+	}
+	return retval;
 }

@@ -82,10 +82,17 @@ l9p_free(void *ptr)
 	free(ptr);
 }
 
+static inline char *
+l9p_strdup(char *str)
+{
+	return strdup(str);
+}
+
 #else
 extern void *l9p_malloc(size_t);
 extern void *l9p_calloc(size_t, size_t);
 extern void *l9p_realloc(void *, size_t);
+extern char *l9p_strdup(char *);
 extern void l9p_free(void *);
 
 #endif /* _KERNEL */

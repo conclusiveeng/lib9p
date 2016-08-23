@@ -10,8 +10,6 @@
 # include <sys/libkern.h>
 # include <sys/errno.h>
 # include <machine/stdarg.h>
-# include <sys/malloc.h>
-# define strdup(x)	strdup(x, M_TEMP)
 #endif
 #include <sys/param.h>
 #include <sys/uio.h>
@@ -51,7 +49,6 @@ client_pack_message(struct l9p_client_rpc *msg)
 	msg->message_data.lm_iov[0].iov_base = buffer;
 	msg->message_data.lm_iov[0].iov_len = client->lc_max_io_size;
 	msg->message_data.lm_niov = 1;
-
 	error = l9p_pufcall(&msg->message_data, &msg->message, client->lc_version);
 	if (error) {
 		l9p_free(buffer);
@@ -96,7 +93,7 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 	union l9p_fcall *send, *recv;
 	int error = 0;
 	struct l9p_client_connection *conn = msg->conn;
-	enum l9p_qid_type expected;
+	enum l9p_ftype expected;
 	
 	bzero(&msg->message_data, sizeof(msg->message_data));
 	bzero(&msg->response, sizeof(msg->response));
@@ -107,7 +104,7 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 	recv = &msg->response;
 
 	msg->tag = send->hdr.tag;
-
+	
 	l9p_describe_fcall(send, conn->lc_version, sb);
 	printf("%s\n", sbuf_data(sb));
 	sbuf_clear(sb);
@@ -123,6 +120,7 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 		error = conn->recv_msg(msg);
 
 	if (error == 0) {
+		struct l9p_message *response = &msg->response_data;
 		error = client_unpack_message(msg);
 	}
 	if (error)
@@ -131,9 +129,9 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 	if (msg->response.hdr.type == L9P_RERROR)
 		error = (int)(msg->response.error.errnum);
 
-	if (msg->response.hdr.type != expected)
+	if (msg->response.hdr.type != expected) {
 		error = EINVAL;
-	
+	}
 done:
 	if (sb)
 		sbuf_delete(sb);
@@ -168,7 +166,7 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 	case L9P_TVERSION:
 		maxsize = (uint32_t)va_arg(ap, int);
 		version_string = va_arg(ap, char *);
-		fcallp->version.hdr.type = type;
+		fcallp->hdr.type = fcallp->version.hdr.type = type;
 		fcallp->version.hdr.tag = NOTAG;	// Override the normal case
 		fcallp->version.msize = maxsize;
 		fcallp->version.version = version_string;
@@ -185,7 +183,7 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 		fcallp->topen.name = NULL;
 		break;
 	case L9P_TCREATE:
-		fcallp->topen.name = strdup(va_arg(ap, char*));
+		fcallp->topen.name = l9p_strdup(va_arg(ap, char*));
 		fcallp->topen.perm = va_arg(ap, uint32_t);
 		fcallp->topen.mode = (uint8_t)va_arg(ap, unsigned int);
 		break;
@@ -193,7 +191,7 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 		fcallp->twalk.newfid = va_arg(ap, uint32_t);
 		error = 0;
 		while ((twalk_name = va_arg(ap, char *)) != NULL) {
-			char *tmp = strdup(twalk_name);
+			char *tmp = l9p_strdup(twalk_name);
 
 			if (tmp == NULL) {
 				error = ENOMEM;

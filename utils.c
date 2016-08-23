@@ -25,14 +25,22 @@
  *
  */
 
-#include <errno.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <assert.h>
-#include <inttypes.h>
+#ifndef _KERNEL
+# include <errno.h>
+# include <stdbool.h>
+# include <stdio.h>
+# include <stdlib.h>
+# include <string.h>
+# include <unistd.h>
+# include <assert.h>
+# include <inttypes.h>
+#else
+# include <sys/libkern.h>
+# define PRIu32	"u"
+# define PRIx32 "x"
+# define PRIx64 "lx"
+# define PRIu64 "lu"
+#endif
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
@@ -42,6 +50,7 @@
 #include "sbuf/sbuf.h"
 #endif
 #include "lib9p.h"
+#include "lib9p_impl.h"
 #include "fcall.h"
 #include "linux_errno.h"
 
@@ -196,9 +205,12 @@ l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length)
 gid_t *
 l9p_getgrlist(const char *name, gid_t basegid, int *angroups)
 {
-#ifdef GETGROUPS_GROUP_TYPE_IS_INT
+#ifdef _KERNEL
+	return (NULL);
+#else
+# ifdef GETGROUPS_GROUP_TYPE_IS_INT
 	int i, *int_groups;
-#endif
+# endif
 	gid_t *groups;
 	int ngroups;
 
@@ -207,26 +219,27 @@ l9p_getgrlist(const char *name, gid_t basegid, int *angroups)
 	 * For now just use NGROUPS_MAX.
 	 */
 	ngroups = NGROUPS_MAX;
-	groups = malloc((size_t)ngroups * sizeof(*groups));
-#ifdef GETGROUPS_GROUP_TYPE_IS_INT
-	int_groups = groups ? malloc((size_t)ngroups * sizeof(*int_groups)) :
+	groups = l9p_malloc((size_t)ngroups * sizeof(*groups));
+# ifdef GETGROUPS_GROUP_TYPE_IS_INT
+	int_groups = groups ? l9p_malloc((size_t)ngroups * sizeof(*int_groups)) :
 	    NULL;
 	if (int_groups == NULL) {
-		free(groups);
+		l9p_free(groups);
 		groups = NULL;
 	}
-#endif
+# endif
 	if (groups == NULL)
 		return (NULL);
-#ifdef GETGROUPS_GROUP_TYPE_IS_INT
+# ifdef GETGROUPS_GROUP_TYPE_IS_INT
 	(void) getgrouplist(name, (int)basegid, int_groups, &ngroups);
 	for (i = 0; i < ngroups; i++)
 		groups[i] = (gid_t)int_groups[i];
-#else
+# else
 	(void) getgrouplist(name, basegid, groups, &ngroups);
-#endif
+# endif
 	*angroups = ngroups;
 	return (groups);
+#endif
 }
 
 /*
@@ -416,7 +429,11 @@ l9p_describe_perm(const char *str, uint32_t mode, struct sbuf *sb)
 {
 	char pbuf[12];
 
+#ifdef _KERNEL
+	sprintf(pbuf, "%#o", mode & 0777);
+#else
 	strmode(mode & 0777, pbuf);
+#endif
 	if ((mode & ~(uint32_t)0777) != 0)
 		sbuf_printf(sb, "%s0x%" PRIx32 "<%.9s>", str, mode, pbuf + 1);
 	else
@@ -506,8 +523,12 @@ l9p_describe_qid(const char *str, struct l9p_qid *qid, struct sbuf *sb)
 		{ 0, 0, NULL }
 	};
 
+#ifdef _KERNEL
+	KASSERT(qid != NULL, __FUNCTION__ ": qid is NULL");
+#else
 	assert(qid != NULL);
-
+#endif
+	
 	sbuf_cat(sb, str);
 	(void) l9p_describe_bits("<", qid->type, "[]", bits, sb);
 	sbuf_printf(sb, ",%" PRIu32 ",0x%016" PRIx64 ">",
@@ -533,8 +554,11 @@ l9p_describe_l9stat(const char *str, struct l9p_stat *st,
 {
 	bool dotu = version >= L9P_2000U;
 
+#ifdef _KERNEL
+	KASSERT(st != NULL, __FUNCTION__ ": st is NULL");
+#else
 	assert(st != NULL);
-
+#endif
 	sbuf_printf(sb, "%stype=0x%04" PRIx32 " dev=0x%08" PRIx32, str,
 	    st->type, st->dev);
 	l9p_describe_qid(" qid=", &st->qid, sb);
@@ -570,8 +594,12 @@ static void
 l9p_describe_statfs(const char *str, struct l9p_statfs *st, struct sbuf *sb)
 {
 
+#ifdef _KERNEL
+	KASSERT(st != NULL, __FUNCTION__ ": st is NULL");
+#else
 	assert(st != NULL);
-
+#endif
+	
 	sbuf_printf(sb, "%stype=0x%04lx bsize=%lu blocks=%" PRIu64
 	    " bfree=%" PRIu64 " bavail=%" PRIu64 " files=%" PRIu64
 	    " ffree=%" PRIu64 " fsid=0x%" PRIx64 " namelen=%" PRIu32 ">",
@@ -634,7 +662,7 @@ l9p_describe_readdir(struct sbuf *sb, struct l9p_f_io *io)
 		sbuf_printf(sb, " offset=%" PRIu64 " type=%d",
 		    de.offset, de.type);
 		l9p_describe_name(" name=", de.name);
-		free(de.name);
+		l9p_free(de.name);
 	}
 	sbuf_printf(sb, "]=%d dir entries", i);
 #else /* notyet */
@@ -710,6 +738,7 @@ lookup_linux_errno(uint32_t linux_errno)
 {
 	static char unknown[50];
 
+	(void)unknown;
 	/*
 	 * Error numbers in the "base" range (1..ERANGE) are common
 	 * across BSD, MacOS, Linux, and Plan 9.
@@ -822,11 +851,16 @@ lookup_linux_errno(uint32_t linux_errno)
 	};
 	if ((size_t)linux_errno < N(table) && table[linux_errno] != NULL)
 		return (table[linux_errno]);
+#ifdef _KERNEL
+	printf("%s(%d): non-linux error %d\n", __FUNCTION__, __LINE__, linux_errno);
+	return ("non-linux error");
+#else
 	if (linux_errno <= ERANGE)
 		return (strerror((int)linux_errno));
 	(void) snprintf(unknown, sizeof(unknown),
 	    "Unknown error %d", linux_errno);
 	return (unknown);
+#endif
 }
 
 void
@@ -837,10 +871,16 @@ l9p_describe_fcall(union l9p_fcall *fcall, enum l9p_version version,
 	uint8_t type;
 	int i;
 
+#ifdef _KERNEL
+	KASSERT(fcall != NULL, __FUNCTION__ ": fcall is NULL");
+	KASSERT(sb != NULL, __FUNCTION__ ": sb is NULL");
+	KASSERT(version <= L9P_2000L && version >= L9P_INVALID_VERSION, __FUNCTION__ ": invalid version");
+#else
 	assert(fcall != NULL);
 	assert(sb != NULL);
 	assert(version <= L9P_2000L && version >= L9P_INVALID_VERSION);
-
+#endif
+	
 	type = fcall->hdr.type;
 
 	if (type < L9P__FIRST || type >= L9P__LAST_PLUS_1 ||

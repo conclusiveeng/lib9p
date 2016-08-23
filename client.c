@@ -1,12 +1,20 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <string.h>
-#include <strings.h>
-#include <stdarg.h>
+#ifndef _KERNEL
+# include <stdio.h>
+# include <stdlib.h>
+# include <errno.h>
+# include <stdarg.h>
+# include <string.h>
+# include <strings.h>
+# include <err.h>
+#else
+# include <sys/libkern.h>
+# include <sys/errno.h>
+# include <machine/stdarg.h>
+# include <sys/malloc.h>
+# define strdup(x)	strdup(x, M_TEMP)
+#endif
 #include <sys/param.h>
 #include <sys/uio.h>
-#include <err.h>
 #ifdef __APPLE__
 # include "apple_endian.h"
 #else
@@ -101,7 +109,7 @@ p9_send_and_reply(struct l9p_client_rpc *msg)
 	msg->tag = send->hdr.tag;
 
 	l9p_describe_fcall(send, conn->lc_version, sb);
-	puts(sbuf_data(sb));
+	printf("%s\n", sbuf_data(sb));
 	sbuf_clear(sb);
 
 	expected = send->hdr.type + 1;
@@ -230,7 +238,7 @@ vp9_msg(struct l9p_client_connection *conn, union l9p_fcall *fcallp, enum l9p_ft
 			error = ENOMEM;
 		}
 #else
-		abort();
+		printf("%s(%d):  caller needs to add iovec\n", __FUNCTION__, __LINE__);
 #endif
 		break;
 	default:

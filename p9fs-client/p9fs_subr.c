@@ -55,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include "../client.h"
 
 static MALLOC_DEFINE(M_P9REQ, "p9fsreq", "Request structures for p9fs");
+static MALLOC_DEFINE(M_P9FS, "p9fs", "P9FS client data");
 
 /* borrowed from ctl_ha.c; there has to be a better way */
 
@@ -77,17 +78,10 @@ p9fs_msg_send(struct l9p_client_rpc *msg)
 	struct p9fs_session *p9s = msg->client_context;
 	struct l9p_client_connection *conn = &p9s->connection;
 	struct l9p_socket_context *socket_ctx = conn->context;
-	struct p9fs_recv *p9r = &p9s->p9s_recv;
-	struct p9fs_req *req;
-	int timo = 30 * hz;
 	uint16_t tag;
 	
-	req = malloc(sizeof (struct p9fs_req), M_P9REQ, M_WAITOK | M_ZERO);
-
 	tag = msg->tag;
 	
-	req->req_tag = tag;
-
 	uio.uio_iov = msg->message_data.lm_iov;
 	uio.uio_iovcnt = msg->message_data.lm_niov;
 	uio.uio_offset = 0;
@@ -99,16 +93,14 @@ p9fs_msg_send(struct l9p_client_rpc *msg)
 	mtx_lock(&p9s->p9s_lock);
 	if (p9s->p9s_state >= P9S_CLOSING) {
 		mtx_unlock(&p9s->p9s_lock);
-		free(req, M_P9REQ);
 		return (ECONNABORTED);
 	}
 	p9s->p9s_threads++;
-	TAILQ_INSERT_TAIL(&p9r->p9r_reqs, req, req_link);
 	mtx_unlock(&p9s->p9s_lock);
 
 	flags = 0;
 	error = sosend(socket_ctx->p9s_sock, &socket_ctx->p9s_sockaddr, &uio, NULL, control,
-	    flags, td);
+		       flags, td);
 	printf("%s(%d):  error = %d\n", __FUNCTION__, __LINE__, error);
 	if (error == EMSGSIZE) {
 		SOCKBUF_LOCK(&socket_ctx->p9s_sock->so_snd);
@@ -117,21 +109,6 @@ p9fs_msg_send(struct l9p_client_rpc *msg)
 	}
 
 	mtx_lock(&p9s->p9s_lock);
-	/*
-	 * Check to see if a response was generated for this request while
-	 * waiting for the lock.
-	 */
-	if (req->req_error != 0 && error == 0)
-		error = req->req_error;
-	printf("%s(%d):  error = %d\n", __FUNCTION__, __LINE__, error);
-
-	if (error == 0 && req->req_msg == NULL)
-		error = msleep(req, &p9s->p9s_lock, PCATCH, "p9reqsend", timo);
-	printf("%s(%d):  error = %d\n", __FUNCTION__, __LINE__, error);
-
-	TAILQ_REMOVE(&p9r->p9r_reqs, req, req_link);
-	if (error == 0)
-		error = req->req_error;
 
 	printf("%s(%d):  error = %d\n", __FUNCTION__, __LINE__, error);
 	/* Ensure any response is disposed of in case of a local error. */
@@ -139,8 +116,6 @@ p9fs_msg_send(struct l9p_client_rpc *msg)
 	p9s->p9s_threads--;
 	wakeup(p9s);
 	mtx_unlock(&p9s->p9s_lock);
-
-	free(req, M_P9REQ);
 
 	return (error);
 }
@@ -203,18 +178,9 @@ again:
 	/* Process errors from soreceive(). */
 	if (error == EWOULDBLOCK)
 		goto out;
-	if (error != 0 /*|| uio.uio_resid > 0*/) {
-		struct p9fs_req *req;
-
-		if (error == 0)
-			error = ECONNRESET;
-
+	if (error != 0) {
 		mtx_lock(&p9s->p9s_lock);
 		p9r->p9r_error = error;
-		TAILQ_FOREACH(req, &p9r->p9r_reqs, req_link) {
-			req->req_error = error;
-			wakeup(req);
-		}
 		mtx_unlock(&p9s->p9s_lock);
 		goto out;
 	}
@@ -244,29 +210,17 @@ again:
 	/* If we have a complete record, match it to a request via tag. */
 	p9r->p9r_resid = uio.uio_resid;
 	if (p9r->p9r_resid == 0) {
-		int found = 0;
 		uint16_t tag;
-		struct p9fs_req *req;
 
 		// Should deal with byte order!
 		bcopy(data_buffer + offsetof(struct l9p_hdr, tag),
 		      &tag, sizeof(tag));
 
-		mtx_lock(&p9s->p9s_lock);
-		TAILQ_FOREACH(req, &p9r->p9r_reqs, req_link) {
-			if (req->req_tag == tag) {
-				found = 1;
-				/* Zero tag to skip any duplicate replies. */
-				req->req_tag = 0;
-				wakeup(req);
-				break;
-			}
-		}
-		mtx_unlock(&p9s->p9s_lock);
-		if (found == 0) {
+		if (tag != msg->tag) {
 			l9p_free(data_buffer);
+			error = EIO;
+			p9r->p9r_msg = NULL;
 		}
-		p9r->p9r_msg = NULL;
 	}
 
 out:
@@ -355,4 +309,20 @@ void
 p9fs_reltag(struct l9p_client_connection *conn, uint16_t tag)
 {
 	free_unr(conn->tags, tag);
+}
+
+void *
+l9p_malloc(size_t sz)
+{
+	return malloc(sz, M_P9FS, M_WAITOK | M_ZERO);
+}
+void *
+l9p_calloc(size_t n, size_t sz)
+{
+	return malloc(n * sz, M_P9FS, M_WAITOK | M_ZERO);
+}
+void
+l9p_free(void *ptr)
+{
+	free(ptr, M_P9FS);
 }

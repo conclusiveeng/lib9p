@@ -9,7 +9,9 @@ SRCS+=	p9fs_subr.c
 SRCS+=	p9fs_vfsops.c
 SRCS+=	p9fs_vnops.c
 SRCS+=	vnode_if.h
-
+SRCS+=	${.CURDIR}/../client.c
+SRCS+=	${.CURDIR}/../pack.c
+SRCS+=	${.CURDIR}/../utils.c
 LDFLAGS=-L..
 LDADD=	../lib9p.a
 

@@ -29,9 +29,14 @@
  * Based on libixp code: ©2007-2010 Kris Maglione <maglione.k at Gmail>
  */
 
-#include <stdlib.h>
-#include <string.h>
-#include <assert.h>
+#ifndef _KERNEL
+# include <stdlib.h>
+# include <string.h>
+# include <assert.h>
+#else
+# include <sys/libkern.h>
+#endif
+
 #include <sys/types.h>
 #include <sys/param.h>
 #ifdef __APPLE__
@@ -73,8 +78,8 @@ l9p_uio_io(struct l9p_message *msg, struct uio *uio, size_t count)
 {
 	size_t amt;
 	
-	assert(msg != NULL);
-	assert(uio != NULL);
+	KASSERT(msg != NULL, "l9p_uio_io: msg is NULL");
+	KASSERT(uio != NULL, "l9p_uio_io: uio is NULL");
 
 	if (msg->lm_cursor_iov >= L9P_MAX_IOV)
 		return (ERANGE);
@@ -84,7 +89,7 @@ l9p_uio_io(struct l9p_message *msg, struct uio *uio, size_t count)
 	while (count) {
 		int error;
 		struct iovec *iovc = msg->lm_iov + msg->lm_cursor_iov;
-		void *base = iovc->iov_base + msg->lm_cursor_offset;
+		void *base = (uint8_t*)iovc->iov_base + msg->lm_cursor_offset;
 		size_t space = iovc->iov_len - msg->lm_cursor_offset;
 
 		/*
@@ -126,16 +131,20 @@ l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
 	size_t done = 0;
 	size_t left = len;
 
+#ifndef _KERNEL
 	assert(msg != NULL);
-
+#endif
+	
 	if (len == 0)
 		return (0);
 
 	if (msg->lm_cursor_iov >= msg->lm_niov)
 		return (-1);
 
+#ifndef _KERNEL
 	assert(buffer != NULL);
-
+#endif
+	
 	while (left > 0) {
 		size_t idx = msg->lm_cursor_iov;
 		size_t space = msg->lm_iov[idx].iov_len - msg->lm_cursor_offset;
@@ -865,23 +874,23 @@ l9p_freefcall(union l9p_fcall *fcall)
 
 	case L9P_TVERSION:
 	case L9P_RVERSION:
-		free(fcall->version.version);
+		l9p_free(fcall->version.version);
 		return;
 
 	case L9P_TATTACH:
-		free(fcall->tattach.aname);
-		free(fcall->tattach.uname);
+		l9p_free(fcall->tattach.aname);
+		l9p_free(fcall->tattach.uname);
 		return;
 
 	case L9P_TWALK:
 		for (i = 0; i < fcall->twalk.nwname; i++)
-			free(fcall->twalk.wname[i]);
+			l9p_free(fcall->twalk.wname[i]);
 		return;
 
 	case L9P_TCREATE:
 	case L9P_TOPEN:
-		free(fcall->tcreate.name);
-		free(fcall->tcreate.extension);
+		l9p_free(fcall->tcreate.name);
+		l9p_free(fcall->tcreate.extension);
 		return;
 
 	case L9P_RSTAT:
@@ -893,58 +902,58 @@ l9p_freefcall(union l9p_fcall *fcall)
 		return;
 
 	case L9P_TLCREATE:
-		free(fcall->tlcreate.name);
+		l9p_free(fcall->tlcreate.name);
 		return;
 
 	case L9P_TSYMLINK:
-		free(fcall->tsymlink.name);
-		free(fcall->tsymlink.symtgt);
+		l9p_free(fcall->tsymlink.name);
+		l9p_free(fcall->tsymlink.symtgt);
 		return;
 
 	case L9P_TMKNOD:
-		free(fcall->tmknod.name);
+		l9p_free(fcall->tmknod.name);
 		return;
 
 	case L9P_TRENAME:
-		free(fcall->trename.name);
+		l9p_free(fcall->trename.name);
 		return;
 
 	case L9P_RREADLINK:
-		free(fcall->rreadlink.target);
+		l9p_free(fcall->rreadlink.target);
 		return;
 
 	case L9P_TXATTRWALK:
-		free(fcall->txattrwalk.name);
+		l9p_free(fcall->txattrwalk.name);
 		return;
 
 	case L9P_TXATTRCREATE:
-		free(fcall->txattrcreate.name);
+		l9p_free(fcall->txattrcreate.name);
 		return;
 
 	case L9P_TLOCK:
-		free(fcall->tlock.client_id);
+		l9p_free(fcall->tlock.client_id);
 		return;
 
 	case L9P_TGETLOCK:
 	case L9P_RGETLOCK:
-		free(fcall->getlock.client_id);
+		l9p_free(fcall->getlock.client_id);
 		return;
 
 	case L9P_TLINK:
-		free(fcall->tlink.name);
+		l9p_free(fcall->tlink.name);
 		return;
 
 	case L9P_TMKDIR:
-		free(fcall->tmkdir.name);
+		l9p_free(fcall->tmkdir.name);
 		return;
 
 	case L9P_TRENAMEAT:
-		free(fcall->trenameat.oldname);
-		free(fcall->trenameat.newname);
+		l9p_free(fcall->trenameat.oldname);
+		l9p_free(fcall->trenameat.newname);
 		return;
 
 	case L9P_TUNLINKAT:
-		free(fcall->tunlinkat.name);
+		l9p_free(fcall->tunlinkat.name);
 		return;
 	}
 }
@@ -952,11 +961,11 @@ l9p_freefcall(union l9p_fcall *fcall)
 void
 l9p_freestat(struct l9p_stat *stat)
 {
-	free(stat->name);
-	free(stat->extension);
-	free(stat->uid);
-	free(stat->gid);
-	free(stat->muid);
+	l9p_free(stat->name);
+	l9p_free(stat->extension);
+	l9p_free(stat->uid);
+	l9p_free(stat->gid);
+	l9p_free(stat->muid);
 }
 
 uint16_t

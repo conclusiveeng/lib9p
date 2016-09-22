@@ -176,7 +176,7 @@ class TestCase(object):
     A failed test will generally disconnect from the server; a
     new ccs() will reconnect, if the server is still alive.
     """
-    def __init__(self, name, tstate, special_connect=False):
+    def __init__(self, name, tstate):
         self.name = name
         self.status = None
         self.detail = None

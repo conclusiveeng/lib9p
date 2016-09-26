@@ -64,6 +64,10 @@ static ssize_t l9p_puqids(struct l9p_message *, uint16_t *, struct l9p_qid *q);
  *
  * Returns the number of bytes actually transferred (which is always
  * just len itself, converted to signed), or -1 if we ran out of space.
+ *
+ * Note that if we return -1, subsequent l9p_iov_io() calls with
+ * the same (and not-reset) msg and len > 0 will also return -1.
+ * This means most users can just check the *last* call for failure.
  */
 static ssize_t
 l9p_iov_io(struct l9p_message *msg, void *buffer, size_t len)
@@ -214,7 +218,11 @@ l9p_pu64(struct l9p_message *msg, uint64_t *val)
  *
  * When unpacking, this allocates a new string (NUL-terminated).
  *
- * Return -1 on error (not space, or failed to allocate string).
+ * Return -1 on error (not space, or failed to allocate string,
+ * or illegal string).
+ *
+ * Note that pustring (and hence pustrings) can return an error
+ * even when l9p_iov_io succeeds.
  */
 static ssize_t
 l9p_pustring(struct l9p_message *msg, char **s)
@@ -235,6 +243,17 @@ l9p_pustring(struct l9p_message *msg, char **s)
 
 	if (l9p_iov_io(msg, *s, len) < 0)
 		return (-1);
+
+	if (msg->lm_mode == L9P_UNPACK) {
+		/*
+		 * An embedded NUL byte in a string is illegal.
+		 * We don't necessarily have to check (we'll just
+		 * treat it as a shorter string), but checking
+		 * seems like a good idea.
+		 */
+		if (memchr(*s, '\0', len) != NULL)
+			return (-1);
+	}
 
 	return ((ssize_t)len + 2);
 }
@@ -441,8 +460,12 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TAUTH:
 		l9p_pu32(msg, &fcall->tauth.afid);
-		l9p_pustring(msg, &fcall->tauth.uname);
+		r = l9p_pustring(msg, &fcall->tauth.uname);
+		if (r < 0)
+			break;
 		r = l9p_pustring(msg, &fcall->tauth.aname);
+		if (r < 0)
+			break;
 		if (version >= L9P_2000U)
 			r = l9p_pu32(msg, &fcall->tauth.n_uname);
 		break;
@@ -454,8 +477,12 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	case L9P_TATTACH:
 		l9p_pu32(msg, &fcall->hdr.fid);
 		l9p_pu32(msg, &fcall->tattach.afid);
-		l9p_pustring(msg, &fcall->tattach.uname);
+		r = l9p_pustring(msg, &fcall->tattach.uname);
+		if (r < 0)
+			break;
 		r = l9p_pustring(msg, &fcall->tattach.aname);
+		if (r < 0)
+			break;
 		if (version >= L9P_2000U)
 			r = l9p_pu32(msg, &fcall->tattach.n_uname);
 		break;
@@ -466,6 +493,8 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_RERROR:
 		r = l9p_pustring(msg, &fcall->error.ename);
+		if (r < 0)
+			break;
 		if (version == L9P_2000U)
 			r = l9p_pu32(msg, &fcall->error.errnum);
 		break;
@@ -504,7 +533,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TCREATE:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->tcreate.name);
+		r = l9p_pustring(msg, &fcall->tcreate.name);
+		if (r < 0)
+			break;
 		l9p_pu32(msg, &fcall->tcreate.perm);
 		r = l9p_pu8(msg, &fcall->tcreate.mode);
 		if (version == L9P_2000U)
@@ -594,7 +625,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TLCREATE:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->tlcreate.name);
+		r = l9p_pustring(msg, &fcall->tlcreate.name);
+		if (r < 0)
+			break;
 		l9p_pu32(msg, &fcall->tlcreate.flags);
 		l9p_pu32(msg, &fcall->tlcreate.mode);
 		r = l9p_pu32(msg, &fcall->tlcreate.gid);
@@ -607,8 +640,12 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TSYMLINK:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->tsymlink.name);
-		l9p_pustring(msg, &fcall->tsymlink.symtgt);
+		r = l9p_pustring(msg, &fcall->tsymlink.name);
+		if (r < 0)
+			break;
+		r = l9p_pustring(msg, &fcall->tsymlink.symtgt);
+		if (r < 0)
+			break;
 		r = l9p_pu32(msg, &fcall->tlcreate.gid);
 		break;
 
@@ -618,7 +655,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TMKNOD:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->tmknod.name);
+		r = l9p_pustring(msg, &fcall->tmknod.name);
+		if (r < 0)
+			break;
 		l9p_pu32(msg, &fcall->tmknod.mode);
 		l9p_pu32(msg, &fcall->tmknod.major);
 		l9p_pu32(msg, &fcall->tmknod.minor);
@@ -702,7 +741,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TXATTRCREATE:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->txattrcreate.name);
+		r = l9p_pustring(msg, &fcall->txattrcreate.name);
+		if (r < 0)
+			break;
 		l9p_pu64(msg, &fcall->txattrcreate.attr_size);
 		r = l9p_pu32(msg, &fcall->txattrcreate.flags);
 		break;
@@ -754,7 +795,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TMKDIR:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->tmkdir.name);
+		r = l9p_pustring(msg, &fcall->tmkdir.name);
+		if (r < 0)
+			break;
 		l9p_pu32(msg, &fcall->tmkdir.mode);
 		r = l9p_pu32(msg, &fcall->tmkdir.gid);
 		break;
@@ -765,7 +808,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TRENAMEAT:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->trenameat.oldname);
+		r = l9p_pustring(msg, &fcall->trenameat.oldname);
+		if (r < 0)
+			break;
 		l9p_pu32(msg, &fcall->trenameat.newdirfid);
 		r = l9p_pustring(msg, &fcall->trenameat.newname);
 		break;
@@ -775,7 +820,9 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 
 	case L9P_TUNLINKAT:
 		l9p_pu32(msg, &fcall->hdr.fid);
-		l9p_pustring(msg, &fcall->tunlinkat.name);
+		r = l9p_pustring(msg, &fcall->tunlinkat.name);
+		if (r < 0)
+			break;
 		r = l9p_pu32(msg, &fcall->tunlinkat.flags);
 		break;
 
@@ -788,7 +835,7 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		break;
 	}
 
-	/* Check for over- or under-run. */
+	/* Check for over- or under-run, or pustring error. */
 	if (r < 0) {
 		if (msg->lm_mode == L9P_UNPACK)
 			l9p_freefcall(fcall);

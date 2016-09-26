@@ -329,7 +329,7 @@ def main():
             except socket.error as err:
                 tc.fail('can no longer connect, did bad pkt crash server?')
             tc.auto_disconnect(clnt)
-            clnt.set_monkey('version', 'wrongo, fishbreath!')
+            clnt.set_monkey('version', b'wrongo, fishbreath!')
             tc.detail = 'connecting'
             try:
                 clnt.connect()
@@ -337,6 +337,22 @@ def main():
                 keep_going = True
                 tc.succ(err.args[0])
             tc.fail('server accepted a bad Tversion')
+
+    if keep_going:
+        # All NUL characters in strings are invalid.
+        with TestCase('send illegal NUL in Tversion', tstate) as tc:
+            clnt = tstate.mkclient()
+            tc.auto_disconnect(clnt)
+            clnt.set_monkey('version', b'9P2000\0')
+            # Forcibly allow downgrade so that Tversion
+            # succeeds if they ignore the \0.
+            clnt.may_downgrade = True
+            tc.detail = 'connecting'
+            try:
+                clnt.connect()
+            except (TEError, RemoteError) as err:
+                tc.succ(err.args[0])
+            tc.fail('server accepted NUL in Tversion')
 
     if keep_going:
         with TestCase('connect normally', tstate) as tc:

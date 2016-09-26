@@ -604,27 +604,26 @@ class P9Client(P9SockIO):
             self.badresp('walk', resp)
         return newfid
 
-    def lookup(self, path, fid=None):
+    def lookup(self, fid, components):
         """
-        Do Twalk.  If input fid is not None it is passed through, else
-        we use the rootfid.  We allocate the new fid ourselves here.
-        Note that if path begins with '/' we use the rootfid even if
-        fid is not None.
+        Do Twalk.  Caller must provide a starting fid, which should
+        be rootfid to look up from '/' - we do not do / vs . here.
+        Caller must also provide a component-ized path (on purpose,
+        so that caller can provide invalid components like '' or '/').
+        The components must be byte-strings as well, for the same
+        reason.
+
+        We do allocate the new fid ourselves here, though.
 
         There's no logic here to split up long walks (yet?).
         """
+        # these are too easy to screw up, so check
         if self.rootfid is None:
             raise LocalError('{0}: not attached'.format(self))
-        if path == '/':
-            fid = self.rootfid
-            components = []
-        else:
-            components = path.split('/')
-            if components[0] == '':
-                components = components[1:]
-                fid = self.rootfid
-            elif fid is None:
-                fid = self.rootfid
+        if (isinstance(components, (str, bytes) or
+            not all(isinstance(i, bytes) for i in components))):
+            raise LocalError('{0}: lookup: invalid '
+                             'components {1!r}'.format(self, components))
         tag = self.get_tag()
         newfid = self.alloc_fid()
         pkt = self.proto.Twalk(tag=tag, fid=fid, newfid=newfid,

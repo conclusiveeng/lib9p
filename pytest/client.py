@@ -411,13 +411,28 @@ def more_test_cases(tstate):
         tc.ccs()
         tc.succ()
 
+    # Empty string is not technically illegal.  It's not clear
+    # whether it should be accepted or rejected.  However, it
+    # used to crash the server entirely, so it's a desirable
+    # test case.
     with TestCase('empty string in Twalk request', tstate) as tc:
         clnt = tc.ccs()
         try:
-            fid, qid = clnt.lookup('//')
+            fid, qid = clnt.lookup(clnt.rootfid, [b''])
         except RemoteError as err:
             tc.succ(err.args[0])
-        tc.fail('empty wname not rejected')
+        clnt.clunk(fid)
+        tc.succ('note: empty Twalk component name not rejected')
+
+    # Name components may not contain /
+    with TestCase('embedded / in lookup component name', tstate) as tc:
+        clnt = tc.ccs()
+        try:
+            fid, qid = clnt.lookup(clnt.rootfid, [b'/'])
+        except RemoteError as err:
+            tc.succ(err.args[0])
+        clnt.clunk(fid)
+        tc.fail('/ in lookup component name not rejected')
 
     with TestCase('rename adjusts other fids', tstate) as tc:
         clnt = tc.ccs()

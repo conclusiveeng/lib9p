@@ -1793,6 +1793,34 @@ plain = p9_version('9p2000')
 dotu = p9_version('9p2000.u')
 dotl = p9_version('9p2000.L')
 
+def qid_type2name(qidtype):
+    """
+    Convert qid type field to printable string.
+
+    >>> qid_type2name(td.QTDIR)
+    'dir'
+    >>> qid_type2name(td.QTAPPEND)
+    'append-only'
+    >>> qid_type2name(0xff)
+    'invalid(0xff)'
+    """
+    try:
+        # Is it ever OK to have multiple bits set,
+        # e.g., both QTAPPEND and QTEXCL?
+        return {
+            td.QTDIR: 'dir',
+            td.QTAPPEND: 'append-only',
+            td.QTEXCL: 'exclusive',
+            td.QTMOUNT: 'mount',
+            td.QTAUTH: 'auth',
+            td.QTTMP: 'tmp',
+            td.QTSYMLINK: 'symlink',
+            td.QTFILE: 'file',
+        }[qidtype]
+    except KeyError:
+        pass
+    return 'invalid({0:#x})'.format(qidtype)
+
 if __name__ == '__main__':
     import doctest
     doctest.testmod()

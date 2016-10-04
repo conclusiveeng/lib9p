@@ -363,7 +363,7 @@ def main():
                 tstate.ccc()
             except RemoteError as err:
                 # can't test any further, but this might be success
-                tstate.stop = False
+                tstate.stop = True
                 if 'they only support version' in err.args[0]:
                     tc.succ(err.args[0])
                 tc.fail(err.args[0])

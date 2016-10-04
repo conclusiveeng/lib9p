@@ -9,8 +9,6 @@ import abc
 import struct
 import sys
 
-DEBUG = False
-
 _ProtoStruct = {
     '1': struct.Struct('<B'),
     '2': struct.Struct('<H'),
@@ -563,6 +561,7 @@ class Sequencer(object):
     def __init__(self, name):
         self.name = name
         self._codes = []
+        self.debug = False # or sys.stderr
 
     def __repr__(self):
         return '{0}({1!r})'.format(self.__class__.__name__, self.name)
@@ -578,6 +577,15 @@ class Sequencer(object):
     def __getitem__(self, index):
         return self._codes[index]
 
+    def dprint(self, *args, **kwargs):
+        if not self.debug:
+            return
+        if isinstance(self.debug, bool):
+            dest = sys.stdout
+        else:
+            dest = self.debug
+        print(*args, file=dest, **kwargs)
+
     def append_encdec(self, cond, code):
         "add EncDec en/de-coder, conditional on cond"
         self._codes.append((cond, code))
@@ -590,13 +598,11 @@ class Sequencer(object):
         for cond, code in self._codes:
             # Skip this item if it's conditional on a false thing.
             if cond is not None and not cdict[cond]:
-                if DEBUG:
-                    print('skip %r - %r is False' % (code, cond))
+                self.dprint('skip %r - %r is False' % (code, cond))
                 continue
 
             # Pack the item.
-            if DEBUG:
-                print('pack %r - no cond or %r is True' % (code, cond))
+            self.dprint('pack %r - no cond or %r is True' % (code, cond))
             packed_data.extend(code.apack(vdict, cdict, vdict[code.name]))
 
         return packed_data
@@ -622,13 +628,11 @@ class Sequencer(object):
         for cond, code in self._codes:
             # Skip this item if it's conditional on a false thing.
             if cond is not None and not cdict[cond]:
-                if DEBUG:
-                    print('skip %r - %r is False' % (code, cond))
+                self.dprint('skip %r - %r is False' % (code, cond))
                 continue
 
             # Unpack the item.
-            if DEBUG:
-                print('unpack %r - no cond or %r is True' % (code, cond))
+            self.dprint('unpack %r - no cond or %r is True' % (code, cond))
             obj, offset = code.unpack(vdict, cdict, bstring, offset, noerror)
             vdict[code.name] = obj
 

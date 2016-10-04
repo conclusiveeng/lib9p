@@ -36,6 +36,7 @@ class TestState(object):
         self.exceptions = 0
         self.clnt_tab = {}
         self.mkclient = None
+        self.stop = False
 
     def ccc(self, cid=None):
         """
@@ -304,7 +305,7 @@ def main():
     may_downgrade = config.getboolean('client', 'may_downgrade')
     timeout = config.getfloat('client', 'timeout')
 
-    keep_going = False
+    tstate.stop = True # unless overwritten below
     with TestCase('send bad packet', tstate) as tc:
         tc.detail = 'connecting to {0}:{1}'.format(server, port)
         try:
@@ -316,13 +317,14 @@ def main():
         pkt = struct.pack('<I', 256);
         conn.write(pkt)
         # ignore reply if any, we're just trying to trip the server
-        keep_going = True
+        tstate.stop = False
         tc.succ()
 
-    if keep_going:
+    if not tstate.stop:
         tstate.mkclient = functools.partial(p9conn.P9Client, logger,
                                            timeout, proto, may_downgrade,
                                            server=server, port=port)
+        tstate.stop = True
         with TestCase('send bad Tversion', tstate) as tc:
             try:
                 clnt = tstate.mkclient()
@@ -334,11 +336,11 @@ def main():
             try:
                 clnt.connect()
             except RemoteError as err:
-                keep_going = True
+                tstate.stop = False
                 tc.succ(err.args[0])
             tc.fail('server accepted a bad Tversion')
 
-    if keep_going:
+    if not tstate.stop:
         # All NUL characters in strings are invalid.
         with TestCase('send illegal NUL in Tversion', tstate) as tc:
             clnt = tstate.mkclient()
@@ -354,20 +356,20 @@ def main():
                 tc.succ(err.args[0])
             tc.fail('server accepted NUL in Tversion')
 
-    if keep_going:
+    if not tstate.stop:
         with TestCase('connect normally', tstate) as tc:
             tc.detail = 'connecting'
             try:
                 tstate.ccc()
             except RemoteError as err:
                 # can't test any further, but this might be success
-                keep_going = False
+                tstate.stop = False
                 if 'they only support version' in err.args[0]:
                     tc.succ(err.args[0])
                 tc.fail(err.args[0])
             tc.succ()
 
-    if keep_going:
+    if not tstate.stop:
         with TestCase('attach with bad afid', tstate) as tc:
             clnt = tstate.ccc()[0]
             section = 'attach-with-bad-afid'
@@ -384,7 +386,7 @@ def main():
             tc.dcc()
             tc.fail('bad attach afid not rejected')
     try:
-        if keep_going:
+        if not tstate.stop:
             more_test_cases(tstate)
     finally:
         tstate.dcc()
@@ -403,13 +405,17 @@ def main():
         print('{0} {1} occurred'.format(tstate.exceptions,
                                        pluralize(tstate.exceptions,
                                                  'exception', 'exceptions')))
-    return 0 # if tstate.failures == 0 else 1
+    if tstate.stop:
+        print('tests stopped early')
+    return 1 if tstate.stop or tstate.exceptions or tstate.failures else 0
 
 def more_test_cases(tstate):
     "run cases that can only proceed if connecting works at all"
     with TestCase('attach normally', tstate) as tc:
         tc.ccs()
         tc.succ()
+    if tstate.stop:
+        return
 
     # Empty string is not technically illegal.  It's not clear
     # whether it should be accepted or rejected.  However, it

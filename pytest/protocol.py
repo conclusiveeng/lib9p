@@ -43,6 +43,13 @@ set only when unpacking those), so here's just one field:
      'n_gid',
      'n_muid')
 
+For parsing bytes returned in a Tread on a directory, td.stat_seq
+is the sequencer to use.  However, most users should rely on
+the unpackers in each protocol (see unpack_dirstat below).
+
+    >>> td.stat_seq
+    Sequencer('stat')
+
 There is a dictionary fcall_to_name that maps from byte value
 to protocol code.  Names map to themselves as well:
 
@@ -347,6 +354,42 @@ If the packet is too long, noerror suppresses the SequenceError:
     SequenceError: 1 byte(s) unconsumed
     >>> dotl.unpack(pkt + b'x', noerror=True)
     Rlink(tag=12345)
+
+To unpack the result of a read() on a directory, use unpack_dirstat.
+The dir-stat values are variable length so this works with offsets.
+If the packet is truncated, you'll get a SequenceError, but just as
+for header unpacking, you can use noerror to suppress this.
+
+(First, we'll need to build some valid packet data.)
+
+    >>> statobj = td.stat(type=0,dev=0,qid=td.qid(0,0,0),mode=0,
+    ... atime=0,mtime=0,length=0,name=b'foo',uid=b'0',gid=b'0',muid=b'0')
+    >>> pkt = td.stat_seq.pack(statobj, plain.conditions)
+    >>> len(pkt)
+    53
+
+Now we can unpack it:
+
+    >>> newobj, offset = plain.unpack_dirstat(pkt, 0)
+    >>> newobj == statobj
+    True
+    >>> offset
+    53
+
+Since the packed data do not include the dotu extensions, we get
+a SequenceError if we try to unpack with dotu or dotl:
+
+    >>> dotu.unpack_dirstat(pkt, 0)         # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+        ...
+    SequenceError: out of data while unpacking 'extension'
+
+When using noerror, the returned new offset will be greater
+than the length of the packet, after a failed unpack:
+
+    >>> newobj, offset = dotu.unpack_dirstat(pkt, 0, noerror=True)
+    >>> offset > len(pkt)
+    True
 
 """
 
@@ -671,6 +714,16 @@ class _P9Proto(object):
         seq = self.pfods[cls].seq
         seq.unpack(vdict, self.conditions, data, noerror)
         return vdict
+
+    def unpack_dirstat(self, bstring, offset, noerror=False):
+        """
+        Produce the next td.stat object from byte-string,
+        returning it and new offset.
+        """
+        statobj = td.stat()
+        offset = td.stat_seq.unpack_from(statobj, self.conditions, bstring,
+                                         offset, noerror)
+        return statobj, offset
 
     def supports(self, fcall):
         """
@@ -1695,6 +1748,10 @@ class _ProtoDefs(object):
             if cls is None:
                 continue
             setattr(namespace, key, cls)
+
+        # Export the sequencer for decoding stat fields
+        # (needed for reading directories).
+        setattr(namespace, 'stat_seq', self.typedefs['stat'][1])
 
         # Export the #define values
         for key, val in self.defines.items():

@@ -4,8 +4,11 @@
 handle plan9 server <-> client connections
 
 (We can act as either server or client.)
+
+This code needs some doctests or other unit tests...
 """
 
+import errno
 import logging
 import socket
 import struct
@@ -13,9 +16,12 @@ import sys
 import threading
 import time
 
+import lerrno
 import numalloc
 import p9err
 import protocol
+
+qt2n = protocol.qid_type2name
 
 STD_P9_PORT=564
 
@@ -23,7 +29,51 @@ class P9Error(Exception):
     pass
 
 class RemoteError(P9Error):
-    pass
+    """
+    Used when the remote returns an error.  We track the client
+    (connection instance), the operation being attempted, the
+    message, and an error number and type.  The message may be
+    from the Rerror reply, or from converting the errno in a dot-L
+    or dot-u Rerror reply.  The error number may be None if the
+    type is 'Rerror' rather than 'Rlerror'.  The message may be
+    None or empty string if a non-None errno supplies the error
+    instead.
+    """
+    def __init__(self, client, op, msg, etype, errno):
+        self.client = str(client)
+        self.op = op
+        self.msg = msg
+        self.etype = etype # 'Rerror' or 'Rlerror'
+        self.errno = errno # may be None
+        self.message = self._get_message()
+        super(RemoteError, self).__init__(self, self.message)
+
+    def __repr__(self):
+        return ('{0!r}({1}, {2}, {3}, {4}, '
+                '{5})'.format(self.__class__.__name__, self.client, self.op,
+                              self.msg, self.errno, self.etype))
+    def __str__(self):
+        prefix = '{0}: {1}: '.format(self.client, self.op)
+        if self.errno: # check for "is not None", or just non-false-y?
+            name = {'Rerror': '.u', 'Rlerror': 'Linux'}[self.etype]
+            middle = '[{0} error {1}] '.format(name, self.errno)
+        else:
+            middle = ''
+        return '{0}{1}{2}'.format(prefix, middle, self.message)
+
+    def is_ENOTSUP(self):
+        if self.etype == 'Rlerror':
+            return self.errno == lerrno.ENOTSUP
+        return self.errno == errno.EOPNOTSUPP
+
+    def _get_message(self):
+        "get message based on self.msg or self.errno"
+        if self.errno is not None:
+            return {
+                'Rlerror': p9err.dotl_strerror,
+                'Rerror' : p9err.dotu_strerror,
+            }[self.etype](self.errno)
+        return self.msg
 
 class LocalError(P9Error):
     pass
@@ -246,12 +296,14 @@ class P9Client(P9SockIO):
         self.fidalloc = numalloc.NumAlloc(0, protocol.td.NOFID - 1)
         self.live_fids = {}
         self.rootfid = None
+        self.rootqid = None
         self.rthread = None
         self.lock = threading.Lock()
         self.new_replies = threading.Condition(self.lock)
         self._monkeywrench = {}
         self._server = server
         self._port = port
+        self._unsup = {}
 
     def get_monkey(self, what):
         "check for a monkey-wrench"
@@ -374,7 +426,7 @@ class P9Client(P9SockIO):
     def read_responses(self):
         "Read responses.  This gets spun off as a thread."
         while self.is_connected():
-            pkt, is_full = self.read()
+            pkt, is_full = super(P9Client, self).read()
             if pkt == b'':
                 self.shutwrite()
                 self.retire_all_tags()
@@ -460,40 +512,35 @@ class P9Client(P9SockIO):
                 break
         return resp
 
-    def check_response(self, req, resp):
+    def badresp(self, req, resp):
         """
-        This is used to check for a timeout or error response.
-
-        req is the name of the request, and resp is the response
-        (which may be None).
-
-        This only returns if resp is not None and is neither
-        Rerror nor Rlerror -- the others all raise an error.
+        Complain that a response was not something expected.
         """
         if resp is None:
             self.shutdown()
             raise TEError('{0}: {1}: timeout or EOF'.format(self, req))
         if isinstance(resp, protocol.rrd.Rlerror):
-            errno = resp.ecode
-            errstr = p9err.dotl_strerror(errno)
-            raise RemoteError('{0}: {1}: [Linux error {2}] '
-                              '{3}'.format(self, req, errno, errstr))
+            raise RemoteError(self, req, None, 'Rlerror', resp.ecode)
         if isinstance(resp, protocol.rrd.Rerror):
-            errno = resp.errnum
-            if errno is not None:
-                # it's 9p2000.u, so we want dotu_strerror(errno)
-                errstr = p9err.dotu_strerror(errno)
-                raise RemoteError('{0}: {1}: [.u error {2}] '
-                                  '{3}'.format(self, req, errno, errstr))
-            # it's plain 9p, we have just a string
-            raise RemoteError('{0}: {1}: {2}'.format(self, req, resp.errstr))
-
-    def badresp(self, req, resp):
-        """
-        Complain that a response was not something expected.
-        """
-        self.check_response(req, resp)
+            if resp.errnum is None:
+                raise RemoteError(self, req, resp.errstr, 'Rerror', None)
+            raise RemoteError(self, req, None, 'Rerror', resp.errnum)
         raise LocalError('{0}: {1} got response {2!r}'.format(self, req, resp))
+
+    def supports(self, req_code):
+        """
+        Test self.proto.support(req_code) unless we've recorded that
+        while the protocol supports it, the client does not.
+        """
+        return req_code not in self._unsup and self.proto.supports(req_code)
+
+    def unsupported(self, req_code):
+        """
+        Record an ENOTSUP (RemoteError was ENOTSUP) for a request.
+        Must be called from the op, this does not happen automatically.
+        (It's just an optimization.)
+        """
+        self._unsup[req_code] = True
 
     def connect(self, server=None, port=None):
         """
@@ -526,14 +573,14 @@ class P9Client(P9SockIO):
         tag = self.get_tag()
         req = protocol.rrd.Tversion(tag=tag, msize=maxio,
                                     version=self.get_monkey('version'))
-        self.write(self.proto.pack_from(req))
+        super(P9Client, self).write(self.proto.pack_from(req))
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rversion):
             self.shutdown()
             if isinstance(resp, protocol.rrd.Rerror):
                 version = req.version or self.proto.get_version()
-                raise RemoteError('{0}: they hated version {1!r}: '
-                                  '{2}'.format(self, version, resp.errstr))
+                raise RemoteError(self, 'version ' + version,
+                                  resp.errstr, 'Rerror', None)
             self.badresp('version', resp)
         their_maxio = resp.msize
         try:
@@ -574,18 +621,20 @@ class P9Client(P9SockIO):
         pkt = self.proto.Tattach(tag=tag, fid=fid, afid=afid,
                                  uname=uname, aname=aname,
                                  n_uname=n_uname)
-        self.write(pkt)
+        super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rattach):
             self.badresp('attach', resp)
         # probably should check resp.qid
         self.rootfid = fid
+        self.rootqid = resp.qid
 
     def shutdown(self):
         "disconnect from server"
         self.retire_all_tags()
         self.retire_all_fids()
         self.rootfid = None
+        self.rootqid = None
         super(P9Client, self).shutdown()
         if self.rthread:
             self.rthread.join()
@@ -597,8 +646,9 @@ class P9Client(P9SockIO):
         """
         tag = self.get_tag()
         newfid = self.alloc_fid()
-        pkt = self.proto.Twalk(tag=tag, fid=fid, newfid=newfid, nwname=0)
-        self.write(pkt)
+        pkt = self.proto.Twalk(tag=tag, fid=fid, newfid=newfid, nwname=0,
+                               wname=[])
+        super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwalk):
             self.badresp('walk', resp)
@@ -628,39 +678,429 @@ class P9Client(P9SockIO):
         newfid = self.alloc_fid()
         pkt = self.proto.Twalk(tag=tag, fid=fid, newfid=newfid,
                                nwname=len(components), wname=components)
-        self.write(pkt)
+        super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwalk):
             self.badresp('walk', resp)
         return newfid, resp.wqid
 
-    def clunk(self, fid):
+    def lookup_last(self, fid, components):
+        """
+        Like lookup, but return only the last component's qid.
+        As a special case, if components is an empty list, we
+        handle that.
+        """
+        rfid, wqid = self.lookup(fid, components)
+        if len(wqid):
+            return rfid, wqid[-1]
+        if fid == self.rootfid:         # usually true, if we get here at all
+            return rfid, self.rootqid
+        tag = self.get_tag()
+        pkt = self.proto.Tstat(tag=tag, fid=rfid)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rstat):
+            self.badresp('stat', resp)
+        return rfid, stat.qid
+
+    def clunk(self, fid, ignore_error=False):
         "issue clunk(fid)"
         tag = self.get_tag()
         pkt = self.proto.Tclunk(tag=tag, fid=fid)
-        self.write(pkt)
+        super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rclunk):
+            if ignore_error:
+                return
             self.badresp('clunk', resp)
         self.retire_fid(fid)
 
-    def remove(self, fid):
+    def remove(self, fid, ignore_error=False):
         "issue remove (old style), which also clunks fid"
         tag = self.get_tag()
         pkt = self.proto.Tremove(tag=tag, fid=fid)
-        self.write(pkt)
+        super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rremove):
+            if ignore_error:
+                return
             self.badresp('remove', resp)
         self.retire_fid(fid)
 
+    def create(self, fid, name, perm, mode, filetype=None, extension=b''):
+        """
+        Issue create op (note that this may be mkdir, symlink, etc).
+        fid is the directory in which the create happens, and for
+        regular files, it becomes, on success, a fid referring to
+        the now-open file.  perm is, e.g., 0644, 0755, etc.,
+        optionally with additional high bits.  mode is a mode
+        byte (e.g., protocol.td.ORDWR, or OWRONLY|OTRUNC, etc.).
+
+        As a service to callers, we take two optional arguments
+        specifying the file type ('dir', 'symlink', 'device',
+        'fifo', or 'socket') and additional info if needed.
+        The additional info for a symlink is the target of the
+        link (a byte string), and the additional info for a device
+        is a byte string with "b <major> <minor>" or "c <major> <minor>".
+
+        Otherwise, callers can leave filetype=None and encode the bits
+        into the mode (caller must still provide extension if needed).
+
+        We do NOT check whether the extension matches extra DM bits,
+        or that there's only one DM bit set, or whatever, since this
+        is a testing setup.
+        """
+        tag = self.get_tag()
+        if filetype is not None:
+            perm |= {
+                'dir': protocol.td.DMDIR,
+                'symlink': protocol.td.DMSYMLINK,
+                'device': protocol.td.DMDEVICE,
+                'fifo': protocol.td.DMNAMEDPIPE,
+                'socket': protocol.td.DMSOCKET,
+            }[filetype]
+        pkt = self.proto.Tcreate(tag=tag, fid=fid, name=name,
+            perm=perm, mode=mode, extension=extension)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rcreate):
+            self.badresp('create', resp)
+        return resp.qid, resp.iounit
+
+    def open(self, fid, mode):
+        "use Topen to open file or directory fid (mode is 1 byte)"
+        tag = self.get_tag()
+        pkt = self.proto.Topen(tag=tag, fid=fid, mode=mode)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Ropen):
+            self.badresp('open', resp)
+        return resp.qid, resp.iounit
+
+    def read(self, fid, offset, count):
+        "read (up to) count bytes from offset, given open fid"
+        tag = self.get_tag()
+        pkt = self.proto.Tread(tag=tag, fid=fid, offset=offset, count=count)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rread):
+            self.badresp('read', resp)
+        return resp.data
+
+    def write(self, fid, offset, data):
+        "write (up to) count bytes to offset, given open fid"
+        tag = self.get_tag()
+        pkt = self.proto.Twrite(tag=tag, fid=fid, offset=offset,
+                                count=len(data), data=data)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rwrite):
+            self.badresp('write', resp)
+        return resp.count
+
+    def unlinkat(self, dirfd, name, flags):
+        "invoke Tunlinkat - flags should be 0 or protocol.td.AT_REMOVEDIR"
+        tag = self.get_tag()
+        pkt = self.proto.Tunlinkat(tag=tag, dirfd=dirfd,
+                                   name=name, flags=flags)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Runlinkat):
+            self.badresp('unlinkat', resp)
+
+    def decode_stat_objects(self, bstring, noerror=False):
+        """
+        Read on a directory returns an array of stat objects.
+        Note that for .u these encode extra data.
+
+        It's possible for this to produce a SequenceError, if
+        the data are incorrect, unless you pass noerror=True.
+        """
+        objlist = []
+        offset = 0
+        while offset < len(bstring):
+            obj, offset = self.proto.unpack_dirstat(bstring, offset, noerror)
+            objlist.append(obj)
+        return objlist
+
     def mkdir(self, dfid, name, mode, gid):
-        "issue mkdir"
+        "issue mkdir (.L)"
         tag = self.get_tag()
         pkt = self.proto.Tmkdir(tag=tag, dfid=dfid, name=name,
                                 mode=mode, gid=gid)
-        self.write(pkt)
+        super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rmkdir):
             self.badresp('mkdir', resp)
         return resp.qid
+
+    def _pathsplit(self, path, startdir, allow_empty=False):
+        "common code for uxlookup and uxopen"
+        if self.rootfid is None:
+            raise LocalError('{0}: not attached'.format(self))
+        if path.startswith(b'/') or startdir is None:
+            startdir = self.rootfid
+        components = [i for i in path.split(b'/') if i != b'']
+        if len(components) == 0 and not allow_empty:
+            raise LocalError('{0}: {1!r}: empty path'.format(self, path))
+        return components, startdir
+
+    def uxlookup(self, path, startdir=None):
+        """
+        Unix-style lookup.  That is, lookup('/foo/bar') or
+        lookup('foo/bar').  If startdir is not None and the
+        path does not start with '/' we look up from there.
+        """
+        components, startdir = self._pathsplit(path, startdir, allow_empty=True)
+        return self.lookup_last(startdir, components)
+
+    def uxopen(self, path, oflags=0, perm=None, startdir=None, filetype=None):
+        """
+        Unix-style open()-with-option-to-create, or mkdir().
+        oflags is 0/1/2 with optional os.O_CREAT, perm defaults
+        to 0o666 (files) or 0o777 (directories).
+
+        Adds a final boolean value for "did we actually create".
+        Raises OSError if you ask for a directory but it's a file,
+        or vice versa.  (??? reconsider this later)
+
+        Note that this does not handle other file types, only
+        directories.
+        """
+        needtype = {
+            'dir': protocol.td.QTDIR,
+            None: protocol.td.QTFILE,
+        }[filetype]
+        omode_byte = oflags & 3 # cheating
+        # allow looking up /, but not creating /
+        allow_empty = (oflags & os.O_CREAT) == 0
+        components, startdir = self._pathsplit(path, startdir,
+                                               allow_empty=allow_empty)
+        if not (oflags & os.O_CREAT):
+            # Not creating, i.e., just look up and open existing file/dir.
+            fid, qid = self.lookup_last(startdir, components)
+            # If we got this far, use Topen on the fid; we did not
+            # create the file.
+            return self._uxopen2(path, needtype, fid, qid, omode_byte, False)
+
+        if len(components) > 1:
+            # Look up all but last component; this part must succeed.
+            fid, _ = self.lookup(startdir, components[:-1])
+
+            # Now proceed with the final component, using fid
+            # as the start dir.
+            startdir = fid
+            components = components[-1:]
+        else:
+            # Use startdir as the start dir, and get a new fid.
+            fid = self.alloc_fid()
+
+        # Now look up the (single) component.  If this fails,
+        # assume the file or directory needs to be created.
+        tag = self.get_tag()
+        pkt = self.proto.Twalk(tag=tag, fid=startdir, newfid=fid,
+                               nwname=1, wname=components)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if isinstance(resp, protocol.rrd.Rwalk):
+            # fid successfully walked to refer to final component.
+            # Just need to actually open the file.
+            qid = resp.wqid[0]
+            return self._uxopen2(needtype, fid, qid, omode_byte, False)
+
+        # Try to create or mkdir as appropriate.
+        if perm is None:
+            perm = protocol.td.DMDIR | 0o777 if filetype == 'dir' else 0o666
+        qid, iounit = self.create(fid, components[0], perm, omode_byte)
+
+        # Success.  If we created an ordinary file, we have everything
+        # now as create alters the incoming (dir) fid to open the file.
+        # Otherwise (mkdir), we need to open the file, as with
+        # a successful lookup.
+        #
+        # Note that qid type should match "needtype".
+        if filetype != 'dir':
+            if qid.type == needtype:
+                return fid, qid, iounit, True
+            self.clunk(fid, ignore_error=True)
+            raise OSError(_wrong_file_type(qid),
+                         '{0}: server told to create {1} but'
+                         'created {2} instead'.format(path,
+                                                      qt2n(needtype),
+                                                      qt2n(qid.type)))
+
+        # Success: created dir; but now need to open it.
+        return self._uxopen2(needtype, fid, qid, omode_byte, True)
+
+    def _uxopen2(self, needtype, fid, qid, omode_byte, didcreate):
+        "common code for finishing up uxopen"
+        if qid.type != needtype:
+            self.clunk(fid, ignore_error=True)
+            raise OSError(_wrong_file_type(qid),
+                          '{0}: is {1}, expected '
+                          '{2}'.format(path, qt2n(qid.type), qt2n(needtype)))
+        qid, iounit = self.open(fid, omode_byte)
+        # ? should we re-check qid? it should not have changed
+        return fid, qid, iounit, didcreate
+
+    def uxmkdir(self, path, perm, gid, startdir=None):
+        """
+        Unix-style mkdir.
+
+        The gid is only applied if we are using .L style mkdir.
+        """
+        components, startdir = self._pathsplit(path, startdir)
+        clunkme = None
+        if len(components) > 1:
+            fid, _ = self.lookup(startdir, components[:-1])
+            startdir = fid
+            clunkme = fid
+            components = components[-1:]
+        try:
+            if self.supports(protocol.td.Tmkdir):
+                qid = self.mkdir(startdir, components[0], perm, gid)
+            else:
+                qid, _ = self.create(startdir, components[0],
+                                     protocol.td.DMDIR | perm,
+                                     protocol.td.OREAD)
+                # Should we chown/chgrp the dir?
+        finally:
+            if clunkme:
+                self.clunk(clunkme, ignore_error=True)
+        return qid
+
+    def uxreaddir_stat(self, path, startdir=None):
+        """
+        Use directory read to get plan9 style stat data (plain or .u readdir).
+
+        Note that this gets a fid, then opens it, reads, then clunks
+        the fid.  If you already have a fid, you may want to use
+        uxreaddir_stat_fid (and you may need to dupfid it).
+
+        We return the qid plus the list of the contents.  If the
+        target is not a directory, the qid will not have type QTDIR
+        and the contents list will be empty.
+        """
+        components, startdir = self._pathsplit(path, startdir)
+        fid, qid = self.lookup_last(startdir, components)
+        statvals = self.ux_readdir_stat_fid(fid)
+        return qid, statvals
+
+    def uxreaddir_stat_fid(self, fid):
+        """
+        Implement readdir loop that extracts stat values.
+        Clunks the fid when done (since we always open it).
+        Clunks the fid even if it's not a directory or open fails.
+        """
+        statvals = []
+        try:
+            qid, iounit = self.open(fid, protocol.td.OREAD)
+            # ?? is a zero iounit allowed? if so, what do we use here?
+            if qid.type == protocol.td.QTDIR:
+                if iounit <= 0:
+                    iounit = 512 # probably good enough
+                offset = 0
+                while True:
+                    bstring = self.read(fid, offset, iounit)
+                    if bstring == b'':
+                        break
+                    statvals.extend(self.decode_stat_objects(bstring))
+                    offset += len(bstring)
+        finally:
+            self.clunk(fid, ignore_error=True)
+        return statvals
+
+    def uxremove(self, path, startdir=None, filetype=None,
+                 force=False, recurse=False):
+        """
+        Implement rm / rmdir, with optional -rf.
+        if filetype is None, remove dir or file.  If 'dir' or 'file'
+        remove only if it's one of those.  If force is set, ignore
+        failures to remove.  If recurse is True, remove contents of
+        directories (recursively).
+
+        File type mismatches (when filetype!=None) raise OSError (?).
+        """
+        components, startdir = self._pathsplit(path, startdir, allow_empty=True)
+        # Look up all components. If
+        # we get an error we'll just assume the file does not
+        # exist (is this good?).
+        try:
+            fid, qid = self.lookup_last(startdir, components)
+        except RemoteError:
+            return
+        if qid.type == protocol.td.QTDIR:
+            # it's a directory, remove only if allowed.
+            # Note that we must check for "rm -r /" (len(compoents)==0).
+            if filetype == 'file':
+                raise OSError(_wrong_file_type(qid),
+                              '{0}: is dir, expected file'.format(path))
+            finalfunc = self.remove if len(components) else self.clunk
+            if recurse:
+                try:
+                    self._rm_recursive(fid, filetype, force)
+                finally:
+                    finalfunc(fid, ignore_error=force)
+                return
+            # This will fail if the directory is non-empty, unless of
+            # course we tell it to ignore error.
+            finalfunc(fid, ignore_error=force)
+            return
+        # Not a directory, call it a file (even if socket or fifo etc).
+        if filetype == 'dir':
+            raise OSError(_wrong_file_type(qid),
+                          '{0}: is file, expected dir'.format(path))
+        self.remove(fid, ignore_error=force)
+
+    def _rm_file_by_dfid(self, dfid, name, force=False):
+        """
+        Remove a file whose name is <name> (no path, just a component
+        name) whose parent directory is <dfid>.  We may assume that the
+        file really is a file (or a socket, or fifo, or some such, but
+        definitely not a directory).
+
+        If force is set, ignore failures.
+        """
+        # If we have unlinkat, that's the fast way.  But it may
+        # return an ENOTSUP error.  If it does we shouldn't bother
+        # doing this again.
+        if self.supports(protocol.td.Tunlinkat):
+            try:
+                self.unlinkat(dfid, name, 0)
+                return
+            except RemoteError as err:
+                if not err.is_ENOTSUP():
+                    raise
+                self.unsupported(protocol.td.Tunlinkat)
+                # fall through to remove() op
+        # Fall back to lookup + remove.
+        try:
+            fid, qid = self.lookup_last(dfid, [name])
+        except RemoteError:
+            return
+        self.remove(fid, ignore_error=force)
+
+    def _rm_recursive(self, dfid, filetype, force):
+        """
+        Recursively remove a directory.  filetype is probably None,
+        but if it's 'dir' we fail if the directory contains non-dir
+        files.
+
+        If force is set, ignore failures.
+        """
+        # first, remove contents
+        for stat in self.uxreaddir_stat_fid(self.dupfid(dfid)):
+            # skip . and ..
+            name = stat.name
+            if name in (b'.', b'..'):
+                continue
+            if stat.qid.type == protocol.td.QTDIR:
+                self.uxremove(name, dfid, filetype, force, True)
+            else:
+                self._rm_file_by_dfid(dfid, name, force)
+
+def _wrong_file_type(qid):
+    "return EISDIR or ENOTDIR for passing to OSError"
+    if qid.type == protocol.td.QTDIR:
+        return errno.EISDIR
+    return errno.ENOTDIR

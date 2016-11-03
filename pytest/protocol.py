@@ -27,7 +27,8 @@ set only when unpacking those), so here's just one field:
     >>> td.stat(*(15 * [0])).mode
     0
     >>> import pprint; pprint.pprint(td.stat()._fields)
-    ('type',
+    ('size',
+     'type',
      'dev',
      'qid',
      'mode',
@@ -362,11 +363,11 @@ for header unpacking, you can use noerror to suppress this.
 
 (First, we'll need to build some valid packet data.)
 
-    >>> statobj = td.stat(type=0,dev=0,qid=td.qid(0,0,0),mode=0,
+    >>> statobj = td.stat(size=55,type=0,dev=0,qid=td.qid(0,0,0),mode=0,
     ... atime=0,mtime=0,length=0,name=b'foo',uid=b'0',gid=b'0',muid=b'0')
     >>> pkt = td.stat_seq.pack(statobj, plain.conditions)
     >>> len(pkt)
-    53
+    55
 
 Now we can unpack it:
 
@@ -374,7 +375,7 @@ Now we can unpack it:
     >>> newobj == statobj
     True
     >>> offset
-    53
+    55
 
 Since the packed data do not include the dotu extensions, we get
 a SequenceError if we try to unpack with dotu or dotl:
@@ -500,7 +501,7 @@ class _PackInfo(object):
 class _P9Proto(object):
     def __init__(self, auto_vars, conditions, p9_data, pfods, index):
         self.auto_vars = auto_vars      # currently, just version
-        self.conditions = conditions    # currently, just '.u'
+        self.conditions = conditions    # '.u' and '.uauth'
         self.pfods = pfods # dictionary, maps pfod to packinfo
         self.index = index # for comparison: plain < dotu < dotl
 
@@ -791,8 +792,9 @@ typedef qid: type[1] version[4] path[8]
 #
 # The constants are named DMDIR etc.
 STATDesc = """
-typedef stat: type[2] dev[4] qid[qid] mode[4] atime[4] mtime[4] length[8] \
-name[s] uid[s] gid[s] muid[s] {.u: extension[s] n_uid[4] n_gid[4] n_muid[4] }
+typedef stat: size[2] type[2] dev[4] qid[qid] mode[4] atime[4] mtime[4] \
+length[8] name[s] uid[s] gid[s] muid[s] \
+{.u: extension[s] n_uid[4] n_gid[4] n_muid[4] }
 
     #define DMDIR           0x80000000
     #define DMAPPEND        0x40000000
@@ -831,7 +833,7 @@ Rstatfs.L: tag[2] type[4] bsize[4] blocks[8] bfree[8] bavail[8] \
         long    f_bfree;    /* free blocks in fs */
         long    f_bavail;   /* free blocks avail to non-superuser */
         long    f_files;    /* total file nodes in file system */
-        lnog    f_ffree;    /* free file nodes in fs */
+        long    f_ffree;    /* free file nodes in fs */
         fsid_t  f_fsid;     /* file system id */
         long    f_namelen;  /* maximum length of filenames */
     };
@@ -1134,6 +1136,10 @@ Runlinkat.L: tag[2]
     server returns ENOTSUPP, the client should fall back to the
     remove operation.
 
+    There seems to be only one defined flag:
+
+        #define AT_REMOVEDIR    0x200
+
 Tversion = 100: tag[2] msize[4] version[s]:auto
 Rversion: tag[2] msize[4] version[s]
 
@@ -1154,7 +1160,7 @@ Rauth: tag[2] aqid[qid]
     handshake (protocol does not specify what is read/written),
     and afid is presented in the attach.
 
-Tattach = 104: tag[2] fid[4] afid[4] uname[s] aname[s] {.u: n_uname[4] }
+Tattach = 104: tag[2] fid[4] afid[4] uname[s] aname[s] {.uauth: n_uname[4] }
 Rattach: tag[2] qid[qid]
     attach introduces a new user to the server, and establishes
     fid as the root for that user on the file tree selected by
@@ -1167,7 +1173,8 @@ Rattach: tag[2] qid[qid]
         #define NOFID       0xffffffff
 
     n_uname, if not set to NONUNAME (~0), is the uid of the
-    user and is used in preference to uname.
+    user and is used in preference to uname.  Note that it appears
+    in both .u and .L (unlike most .u-specific features).
 
         #define NONUNAME    0xffffffff
 
@@ -1379,10 +1386,10 @@ def _parse_expr(seq, string, typedefs):
     is much like name2*(name[1]), except that the result is a
     simple byte string, rather than an array.
 
-    The meaning of "{ label ... " is currently limited to "{ .u:",
-    which means that everything following up to "}" is optional and
-    used only with 9P2000.u.  Inside the {...} pair is the usual set
-    of tokens, but again {...} cannot recurse.
+    The meaning of "{ label ... " is that everything following up
+    to "}" is optional and used only with 9P2000.u and/or 9P2000.L.
+    Inside the {...} pair is the usual set of tokens, but again
+    {...} cannot recurse.
 
     The parse fills in a Sequencer instance, and returns a list
     of the parsed names.
@@ -1496,7 +1503,7 @@ def _parse_expr(seq, string, typedefs):
             cond = tokens.popleft()
             if cond.ttype != 'label':
                 raise ValueError('"{" not followed by cond label')
-            if cond.value != '.u':
+            if cond.value != '.u' and cond.value != '.uauth':
                 raise ValueError('unsupported condition "{0}"'.format(
                     cond.value))
             continue
@@ -1820,17 +1827,17 @@ _9p_data.export(sys.modules[__name__])
 # Currently we look up by text-string, in lowercase.
 _9p_versions = {
     '9p2000': _P9Proto({'version': '9P2000'},
-                       {'.u': False},
+                       {'.u': False, '.uauth': False},
                        _9p_data,
                        _9p_data.plain,
                        0),
     '9p2000.u': _P9Proto({'version': '9P2000.u'},
-                         {'.u': True},
+                         {'.u': True, '.uauth': True},
                          _9p_data,
                          _9p_data.dotu,
                          1),
     '9p2000.l': _P9Proto({'version': '9P2000.L'},
-                         {'.u': True},
+                         {'.u': False, '.uauth': True},
                          _9p_data,
                          _9p_data.dotl,
                          2),

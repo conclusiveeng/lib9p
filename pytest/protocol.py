@@ -392,6 +392,25 @@ than the length of the packet, after a failed unpack:
     >>> offset > len(pkt)
     True
 
+Similarly, use unpack_dirent to unpack the result of a dot-L
+readdir(), using offsets.  Note that these are not (currently?)
+conditional but we might as well use dotl.conditions here,
+since dirent data is only supported in dot-L anyway.
+
+    >>> dirent = td.dirent(qid=td.qid(1,2,3),offset=0,
+    ... type=td.DT_REG,name=b'foo')
+    >>> pkt = td.dirent_seq.pack(dirent, dotl.conditions)
+    >>> len(pkt)
+    27
+
+and then:
+
+    >>> newde, offset = dotl.unpack_dirent(pkt, 0)
+    >>> newde == dirent
+    True
+    >>> offset
+    27
+
 """
 
 from __future__ import print_function
@@ -726,6 +745,16 @@ class _P9Proto(object):
                                          offset, noerror)
         return statobj, offset
 
+    def unpack_dirent(self, bstring, offset, noerror=False):
+        """
+        Produces the next td.dirent object from byte-string,
+        returning it and new offset.
+        """
+        deobj = td.dirent()
+        offset = td.dirent_seq.unpack_from(deobj, self.conditions, bstring,
+                                           offset, noerror)
+        return deobj, offset
+
     def supports(self, fcall):
         """
         Return True if and only if this protocol supports the
@@ -808,6 +837,23 @@ length[8] name[s] uid[s] gid[s] muid[s] \
     #define DMSOCKET        0x00100000
     #define DMSETUID        0x00080000
     #define DMSETGID        0x00040000
+"""
+
+# This defines a dirent decoder, which has a dot-L specific format.
+#
+# The dirent type fields are defined as DT_* (same as BSD and Linux).
+DirentDesc = """
+typedef dirent: qid[qid] offset[8] type[1] name[s]
+
+    #define DT_UNKNOWN       0
+    #define DT_FIFO          1
+    #define DT_CHR           2
+    #define DT_DIR           4
+    #define DT_BLK           6
+    #define DT_REG           8
+    #define DT_LNK          10
+    #define DT_SOCK         12
+    #define DT_WHT          14
 """
 
 # N.B.: this is largely a slightly more rigidly formatted variant of
@@ -1032,7 +1078,7 @@ Rxattrcreate.L: tag[2]
     will be returned.
 
 Treaddir.L = 40: tag[2] fid[4] offset[8] count[4]
-Rreadir.L: tag[2] count[4] data[count]
+Rreaddir.L: tag[2] count[4] data[count]
     readdir requests that the server return directory entries from
     the directory represented by fid, previously opened with
     lopen.  offset is zero on the first call.
@@ -1568,6 +1614,8 @@ class _ProtoDefs(object):
         self.parse_lines('SDesc', SDesc, typedef_re, self.handle_typedef)
         self.parse_lines('QIDDesc', QIDDesc, typedef_re, self.handle_typedef)
         self.parse_lines('STATDesc', STATDesc, typedef_re, self.handle_typedef)
+        self.parse_lines('DirentDesc', DirentDesc, typedef_re,
+                         self.handle_typedef)
 
         # Scan protocol (the bulk of the work).  This, too, may
         # execute '#define's.
@@ -1759,6 +1807,9 @@ class _ProtoDefs(object):
         # Export the sequencer for decoding stat fields
         # (needed for reading directories).
         setattr(namespace, 'stat_seq', self.typedefs['stat'][1])
+
+        # Export the similar dirent decoder.
+        setattr(namespace, 'dirent_seq', self.typedefs['dirent'][1])
 
         # Export the #define values
         for key, val in self.defines.items():

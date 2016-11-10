@@ -205,6 +205,11 @@ class TestCase(object):
         self.detail = detail
         raise TCDone()
 
+    def trace(self, msg, *args, **kwargs):
+        "add tracing info to log-file output"
+        level = kwargs.pop('level', logging.INFO)
+        self.tstate.logger.log(logging.INFO, msg, *args, **kwargs)
+
     def ccs(self):
         "call tstate ccs, turn socket.error connect failure into test fail"
         try:
@@ -385,6 +390,7 @@ def main():
                 tc.succ(err.args[0])
             tc.dcc()
             tc.fail('bad attach afid not rejected')
+
     try:
         if not tstate.stop:
             more_test_cases(tstate)
@@ -440,17 +446,70 @@ def more_test_cases(tstate):
         clnt.clunk(fid)
         tc.fail('/ in lookup component name not rejected')
 
+    # Proceed from a clean tree.  As a side effect, this also tests
+    # at least the old style readdir (read() on a directory fid).
+    #
+    # The test case will fail if we don't have permission to remove
+    # some file(s).
+    with TestCase('clean up tree (readdir+remove)', tstate) as tc:
+        clnt = tc.ccs()
+        fset = clnt.uxreaddir(b'/', no_dotl=True)
+        fset = [i for i in fset if i != '.' and i != '..']
+        tc.trace("what's there initially: {0!r}".format(fset))
+        try:
+            clnt.uxremove(b'/', force=False, recurse=True)
+        except RemoteError as err:
+            tc.trace('failed to read or clean up tree', level=logging.ERROR)
+            tc.trace('this might be a permissions error', level=logging.ERROR)
+            tstate.stop = True
+            tc.fail(str(err))
+        fset = clnt.uxreaddir(b'/', no_dotl=True)
+        fset = [i for i in fset if i != '.' and i != '..']
+        tc.trace("what's left after removing everything: {0!r}".format(fset))
+        if fset:
+            tstate.stop = True
+            tc.trace('note: could be a permissions error', level=logging.ERROR)
+            tc.fail('/ not empty after removing all: {0!r}'.format(fset))
+        tc.succ()
+    if tstate.stop:
+        return
+
+    # Name supplied to create, mkdir, etc, may not contain /.
+    # Note that this test may fail for the wrong reason if /dir
+    # itself does not already exist, so first let's make /dir.
+    with TestCase('mkdir', tstate) as tc:
+        clnt = tc.ccs()
+        try:
+            fid, qid = clnt.uxlookup(b'/dir', None)
+            tstate.stop = True
+            tc.fail('found existing /dir after cleaning tree')
+        except RemoteError as err:
+            # we'll just assume it's "no such file or directory"
+            pass
+        qid, _ = clnt.create(clnt.rootfid, b'dir',
+                             protocol.td.DMDIR | 0o777,
+                             protocol.td.OREAD)
+        if qid.type != protocol.td.QTDIR:
+            tstate.stop = True
+            tc.fail('creating /dir: result is not a directory')
+        tc.trace('now attempting to create /dir/sub the wrong way')
+        try:
+            qid, _ = clnt.create(clnt.rootfid, b'dir/sub',
+                                 protocol.td.DMDIR | 0o777,
+                                 protocol.td.OREAD)
+            tc.fail('created dir/sub as single directory with embedded slash')
+            # it's not clear what happened on the server at this point!
+        except RemoteError as err:
+            # we'll just assume it's the right kind of error
+            tc.trace('invalid path dir/sub failed with: %s', str(err))
+            tc.succ('embedded slash in mkdir correctly refused')
+    if tstate.stop:
+        return
+
     with TestCase('rename adjusts other fids', tstate) as tc:
         clnt = tc.ccs()
         if clnt.proto < protocol.dotl or True:
             tc.skip('applies only to 9P2000.L')
-        fid, qid = clnt.lookup('/')
-        if qid.type != protocol.rrd.QTDIR:
-            tc.fail('/ is not a directory')
-        clnt.mkdir(fid, 'dir')
-        fid, qid = clnt.lookup('dir', fid)
-        if qid.type != protocol.rrd.QTDIR:
-            tc.fail('/dir is not a directory')
         tc.succ()
 
 if __name__ == '__main__':

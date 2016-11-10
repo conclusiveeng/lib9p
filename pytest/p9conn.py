@@ -271,6 +271,23 @@ class P9SockIO(object):
                              'maximum {1}'.format(size, self.max_payload))
         self.channel.sendall(data)
 
+def _pathcat(prefix, suffix):
+    """
+    Concatenate paths we are using on the server side.  This is
+    basically just prefix + / + suffix, with two complications:
+
+    It's possible we don't have a prefix path, in which case
+    we want the suffix without a leading slash.
+
+    It's possible that the prefix is just b'/', in which case we
+    want prefix + suffix.
+    """
+    if prefix:
+        if prefix == b'/':  # or prefix.endswith(b'/')?
+            return prefix + suffix
+        return prefix + b'/' + suffix
+    return suffix
+
 class P9Client(P9SockIO):
     """
     Act as client.
@@ -281,6 +298,12 @@ class P9Client(P9SockIO):
 
     If server and port are supplied, they are remembered and become
     the default for .connect() (which is still deferred).
+
+    Note that we keep a table of fid-to-path in self.live_fids,
+    but at any time (except while holding the lock) a fid can
+    be deleted entirely, and the table entry may just be True
+    if we have no path name.  In general, we update the name
+    when we can.
     """
     def __init__(self, logger, timeout, version, may_downgrade=True,
                  server=None, port=None):
@@ -408,8 +431,42 @@ class P9Client(P9SockIO):
         "allocate new fid"
         with self.lock:
             fid = self.fidalloc.alloc()
-            self.live_fids[fid] = True  # XXX
+            self.live_fids[fid] = True
         return fid
+
+    def getpath(self, fid):
+        "get path from fid, or return None if no path known, or not valid"
+        with self.lock:
+            path = self.live_fids.get(fid)
+        if path is True:
+            path = None
+        return path
+
+    def getpathX(self, fid):
+        """
+        Much like getpath, but return <fid N, unknown path> if necessary.
+        If we do have a path, return its repr().
+        """
+        path = self.getpath(fid)
+        if path is None:
+            return '<fid {0}, unknown path>'.format(fid)
+        return repr(path)
+
+    def setpath(self, fid, path):
+        "associate fid with new path (possibly from another fid)"
+        with self.lock:
+            if isinstance(path, int):
+                path = self.live_fids.get(path)
+            # path might now be None (not a live fid after all), or
+            # True (we have no path name), or potentially even the
+            # empty string (invalid for our purposes).  Treat all of
+            # those as True, meaning "no known path".
+            if not path:
+                path = True
+            if self.live_fids.get(fid):
+                # Existing fid maps to either True or its old path.
+                # Set the new path (which may be just a placeholder).
+                self.live_fids[fid] = path
 
     def retire_fid(self, fid):
         "retire one fid"
@@ -421,7 +478,7 @@ class P9Client(P9SockIO):
         "return live fids to pool"
         with self.lock:
             self.fidalloc.free_multi(self.live_fids.keys())
-            self.live_fids = {}         # XXX
+            self.live_fids = {}
 
     def read_responses(self):
         "Read responses.  This gets spun off as a thread."
@@ -628,6 +685,7 @@ class P9Client(P9SockIO):
         # probably should check resp.qid
         self.rootfid = fid
         self.rootqid = resp.qid
+        self.setpath(fid, b'/')
 
     def shutdown(self):
         "disconnect from server"
@@ -651,7 +709,9 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwalk):
-            self.badresp('walk', resp)
+            self.badresp('walk {0}'.format(self.getpathX(fid)), resp)
+        # Copy path too
+        self.setpath(newfid, fid)
         return newfid
 
     def lookup(self, fid, components):
@@ -676,12 +736,16 @@ class P9Client(P9SockIO):
                              'components {1!r}'.format(self, components))
         tag = self.get_tag()
         newfid = self.alloc_fid()
+        startpath = self.getpath(fid)
         pkt = self.proto.Twalk(tag=tag, fid=fid, newfid=newfid,
                                nwname=len(components), wname=components)
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwalk):
-            self.badresp('walk', resp)
+            self.badresp('walk {0} in '
+                         '{1}'.format(components, self.getpathX(fid)),
+                         resp)
+        self.setpath(newfid, _pathcat(startpath, b'/'.join(components)))
         return newfid, resp.wqid
 
     def lookup_last(self, fid, components):
@@ -700,7 +764,7 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rstat):
-            self.badresp('stat', resp)
+            self.badresp('stat {0}'.format(self.getpathX(fid)), resp)
         return rfid, stat.qid
 
     def clunk(self, fid, ignore_error=False):
@@ -712,7 +776,7 @@ class P9Client(P9SockIO):
         if not isinstance(resp, protocol.rrd.Rclunk):
             if ignore_error:
                 return
-            self.badresp('clunk', resp)
+            self.badresp('clunk {0}'.format(self.getpathX(fid)), resp)
         self.retire_fid(fid)
 
     def remove(self, fid, ignore_error=False):
@@ -723,8 +787,10 @@ class P9Client(P9SockIO):
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rremove):
             if ignore_error:
+                # remove failed: still need to clunk the fid
+                self.clunk(fid, True)
                 return
-            self.badresp('remove', resp)
+            self.badresp('remove {0}'.format(self.getpathX(fid)), resp)
         self.retire_fid(fid)
 
     def create(self, fid, name, perm, mode, filetype=None, extension=b''):
@@ -764,7 +830,12 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rcreate):
-            self.badresp('create', resp)
+            self.badresp('create {0} in {1}'.format(name, self.getpathX(fid)),
+                         resp)
+        if resp.qid.type == protocol.td.QTFILE:
+            # Creating a regular file opens the file,
+            # thus changing the fid's path.
+            self.setpath(fid, _pathcat(self.getpath(fid), name))
         return resp.qid, resp.iounit
 
     def open(self, fid, mode):
@@ -774,7 +845,7 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Ropen):
-            self.badresp('open', resp)
+            self.badresp('open {0}'.format(self.getpathX(fid)), resp)
         return resp.qid, resp.iounit
 
     def read(self, fid, offset, count):
@@ -784,7 +855,9 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rread):
-            self.badresp('read', resp)
+            self.badresp('read {0} bytes at offset {1} in '
+                         '{2}'.format(count, offset, self.getpathX(fid)),
+                         resp)
         return resp.data
 
     def write(self, fid, offset, data):
@@ -795,7 +868,9 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwrite):
-            self.badresp('write', resp)
+            self.badresp('write {0} bytes at offset {1} in '
+                         '{2}'.format(count, offset, self.getpathX(fid)),
+                         resp)
         return resp.count
 
     def unlinkat(self, dirfd, name, flags):
@@ -806,7 +881,8 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Runlinkat):
-            self.badresp('unlinkat', resp)
+            self.badresp('unlinkat {0} in '
+                         '{1}'.format(name, self.getpathX(fid)), resp)
 
     def decode_stat_objects(self, bstring, noerror=False):
         """
@@ -831,7 +907,8 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rmkdir):
-            self.badresp('mkdir', resp)
+            self.badresp('mkdir {0} in '
+                         '{1}'.format(name, self.getpathX(dfid)), resp)
         return resp.qid
 
     def _pathsplit(self, path, startdir, allow_empty=False):
@@ -905,6 +982,7 @@ class P9Client(P9SockIO):
         if isinstance(resp, protocol.rrd.Rwalk):
             # fid successfully walked to refer to final component.
             # Just need to actually open the file.
+            self.setpath(fid, _pathcat(self.getpath(startdir), components[0]))
             qid = resp.wqid[0]
             return self._uxopen2(needtype, fid, qid, omode_byte, False)
 
@@ -921,15 +999,27 @@ class P9Client(P9SockIO):
         # Note that qid type should match "needtype".
         if filetype != 'dir':
             if qid.type == needtype:
+                self.setpath(fid,
+                             _pathcat(self.getpath(startdir), components[0]))
                 return fid, qid, iounit, True
             self.clunk(fid, ignore_error=True)
             raise OSError(_wrong_file_type(qid),
-                         '{0}: server told to create {1} but'
+                         '{0}: server told to create {1} but '
                          'created {2} instead'.format(path,
                                                       qt2n(needtype),
                                                       qt2n(qid.type)))
 
-        # Success: created dir; but now need to open it.
+        # Success: created dir; but now need to walk to and open it.
+        tag = self.get_tag()
+        pkt = self.proto.Twalk(tag=tag, fid=fid, newfid=fid,
+                               nwname=1, wname=components)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rwalk):
+            self.clunk(fid, ignore_error=True)
+            raise OSError('{0}: server made dir but then failed to '
+                          'find it again'.format(path))
+            self.setpath(fid, _pathcat(self.getpath(fid), components[0]))
         return self._uxopen2(needtype, fid, qid, omode_byte, True)
 
     def _uxopen2(self, needtype, fid, qid, omode_byte, didcreate):
@@ -1077,6 +1167,8 @@ class P9Client(P9SockIO):
         try:
             fid, qid = self.lookup_last(dfid, [name])
         except RemoteError:
+            # If this has an errno we could tell ENOENT from EPERM,
+            # and actually raise an error for the latter.  Should we?
             return
         self.remove(fid, ignore_error=force)
 

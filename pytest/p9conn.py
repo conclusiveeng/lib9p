@@ -10,6 +10,7 @@ This code needs some doctests or other unit tests...
 
 import errno
 import logging
+import os
 import socket
 import struct
 import sys
@@ -591,6 +592,10 @@ class P9Client(P9SockIO):
         """
         return req_code not in self._unsup and self.proto.supports(req_code)
 
+    def supports_all(self, *req_codes):
+        "basically just all(supports(...))"
+        return all(self.supports(code) for code in req_codes)
+
     def unsupported(self, req_code):
         """
         Record an ENOTSUP (RemoteError was ENOTSUP) for a request.
@@ -851,6 +856,16 @@ class P9Client(P9SockIO):
             self.badresp('open {0}'.format(self.getpathX(fid)), resp)
         return resp.qid, resp.iounit
 
+    def lopen(self, fid, flags):
+        "use Tlopen to open file or directory fid (flags from L_O_*)"
+        tag = self.get_tag()
+        pkt = self.proto.Tlopen(tag=tag, fid=fid, flags=flags)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rlopen):
+            self.badresp('lopen {0}'.format(self.getpathX(fid)), resp)
+        return resp.qid, resp.iounit
+
     def read(self, fid, offset, count):
         "read (up to) count bytes from offset, given open fid"
         tag = self.get_tag()
@@ -876,6 +891,18 @@ class P9Client(P9SockIO):
                          resp)
         return resp.count
 
+    def readdir(self, fid, offset, count):
+        "read (up to) count bytes of dir data from offset, given open fid"
+        tag = self.get_tag()
+        pkt = self.proto.Treaddir(tag=tag, fid=fid, offset=offset, count=count)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rreaddir):
+            self.badresp('readdir {0} bytes at offset {1} in '
+                         '{2}'.format(count, offset, self.getpathX(fid)),
+                         resp)
+        return resp.data
+
     def unlinkat(self, dirfd, name, flags):
         "invoke Tunlinkat - flags should be 0 or protocol.td.AT_REMOVEDIR"
         tag = self.get_tag()
@@ -899,6 +926,20 @@ class P9Client(P9SockIO):
         offset = 0
         while offset < len(bstring):
             obj, offset = self.proto.unpack_dirstat(bstring, offset, noerror)
+            objlist.append(obj)
+        return objlist
+
+    def decode_readdir_dirents(self, bstring, noerror=False):
+        """
+        Readdir on a directory returns an array of dirent objects.
+
+        It's possible for this to produce a SequenceError, if
+        the data are incorrect, unless you pass noerror=True.
+        """
+        objlist = []
+        offset = 0
+        while offset < len(bstring):
+            obj, offset = self.proto.unpack_dirent(bstring, offset, noerror)
             objlist.append(obj)
         return objlist
 
@@ -1062,6 +1103,31 @@ class P9Client(P9SockIO):
                 self.clunk(clunkme, ignore_error=True)
         return qid
 
+    def uxreaddir(self, path, startdir=None, no_dotl=False):
+        """
+        Read a directory to get a list of names (which may or may not
+        include '.' and '..').
+
+        If no_dotl is True (or anything non-false-y), this uses the
+        plain or .u readdir format, otherwise it uses dot-L readdir
+        if possible.
+        """
+        components, startdir = self._pathsplit(path, startdir, allow_empty=True)
+        fid, qid = self.lookup_last(startdir, components)
+        if qid.type != protocol.td.QTDIR:
+            raise OSError(errno.ENOTDIR,
+                          '{0}: {1}'.format(self.getpathX(fid),
+                                            os.strerror(errno.ENOTDIR)))
+        # We need both Tlopen and Treaddir to use Treaddir.
+        if not self.supports_all(protocol.td.Tlopen, protocol.td.Treaddir):
+            no_dotl = True
+        if no_dotl:
+            statvals = self.uxreaddir_stat_fid(fid)
+            return [stat.name for stat in statvals]
+
+        dirents = self.uxreaddir_dotl_fid(fid)
+        return [dirent.name for dirent in dirents]
+
     def uxreaddir_stat(self, path, startdir=None):
         """
         Use directory read to get plan9 style stat data (plain or .u readdir).
@@ -1073,9 +1139,15 @@ class P9Client(P9SockIO):
         We return the qid plus the list of the contents.  If the
         target is not a directory, the qid will not have type QTDIR
         and the contents list will be empty.
+
+        Raises OSError if this is applied to a non-directory.
         """
         components, startdir = self._pathsplit(path, startdir)
         fid, qid = self.lookup_last(startdir, components)
+        if qid.type != protocol.td.QTDIR:
+            raise OSError(errno.ENOTDIR,
+                          '{0}: {1}'.format(self.getpathX(fid),
+                                            os.strerror(errno.ENOTDIR)))
         statvals = self.ux_readdir_stat_fid(fid)
         return qid, statvals
 
@@ -1084,6 +1156,9 @@ class P9Client(P9SockIO):
         Implement readdir loop that extracts stat values.
         Clunks the fid when done (since we always open it).
         Clunks the fid even if it's not a directory or open fails.
+
+        Unlike uxreaddir_stat(), if this is applied to a file,
+        rather than a directory, it just returns no entries.
         """
         statvals = []
         try:
@@ -1102,6 +1177,34 @@ class P9Client(P9SockIO):
         finally:
             self.clunk(fid, ignore_error=True)
         return statvals
+
+    def uxreaddir_dotl_fid(self, fid):
+        """
+        Implement readdir loop that uses dot-L style dirents.
+        Clunks the fid when done (since we always open it).
+        Clunks the fid even if it's not a directory or lopen fails.
+
+        If applied to a file, the lopen should fail, because of the
+        L_O_DIRECTORY flag.
+        """
+        dirents = []
+        try:
+            qid, iounit = self.lopen(fid, protocol.td.OREAD |
+                                          protocol.td.L_O_DIRECTORY)
+            # ?? is a zero iounit allowed? if so, what do we use here?
+            # but, we want a minimum of over 256 anyway, let's go for 512
+            if iounit < 512:
+                iounit = 512
+            offset = 0
+            while True:
+                bstring = self.readdir(fid, offset, iounit)
+                if bstring == b'':
+                    break
+                dirents.extend(self.decode_readdir_dirents(bstring))
+                offset += len(bstring)
+        finally:
+            self.clunk(fid, ignore_error=True)
+        return dirents
 
     def uxremove(self, path, startdir=None, filetype=None,
                  force=False, recurse=False):

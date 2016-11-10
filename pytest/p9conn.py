@@ -636,6 +636,9 @@ class P9Client(P9SockIO):
             self.shutdown()
             if isinstance(resp, protocol.rrd.Rerror):
                 version = req.version or self.proto.get_version()
+                # for python3, we need to convert version to string
+                if not isinstance(version, str):
+                    version = version.decode('utf-8', 'surrogateescape')
                 raise RemoteError(self, 'version ' + version,
                                   resp.errstr, 'Rerror', None)
             self.badresp('version', resp)

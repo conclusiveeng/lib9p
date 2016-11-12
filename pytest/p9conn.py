@@ -717,6 +717,7 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwalk):
+            self.retire_fid(newfid)
             self.badresp('walk {0}'.format(self.getpathX(fid)), resp)
         # Copy path too
         self.setpath(newfid, fid)
@@ -750,6 +751,7 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwalk):
+            self.retire_fid(newfid)
             self.badresp('walk {0} in '
                          '{1}'.format(components, self.getpathX(fid)),
                          resp)
@@ -887,7 +889,7 @@ class P9Client(P9SockIO):
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rwrite):
             self.badresp('write {0} bytes at offset {1} in '
-                         '{2}'.format(count, offset, self.getpathX(fid)),
+                         '{2}'.format(len(data), offset, self.getpathX(fid)),
                          resp)
         return resp.count
 
@@ -1030,6 +1032,12 @@ class P9Client(P9SockIO):
             qid = resp.wqid[0]
             return self._uxopen2(needtype, fid, qid, omode_byte, False)
 
+        # Walk failed.  If we allocated a fid, retire it.  Then
+        # dup the parent directory, since we're using the old style
+        # create, which will overwrite the fid.
+        if fid != startdir:
+            self.retire_fid(fid)
+        fid = self.dupfid(startdir)
         # Try to create or mkdir as appropriate.
         if perm is None:
             perm = protocol.td.DMDIR | 0o777 if filetype == 'dir' else 0o666

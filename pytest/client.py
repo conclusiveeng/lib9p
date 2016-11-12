@@ -37,6 +37,7 @@ class TestState(object):
         self.clnt_tab = {}
         self.mkclient = None
         self.stop = False
+        self.gid = 0
 
     def ccc(self, cid=None):
         """
@@ -393,6 +394,8 @@ def main():
 
     try:
         if not tstate.stop:
+            # Various Linux tests need gids.  Just get them for everyone.
+            tstate.gid = getint(tstate.config, None, 'gid', 0)
             more_test_cases(tstate)
     finally:
         tstate.dcc()

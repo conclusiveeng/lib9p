@@ -755,6 +755,24 @@ class P9Client(P9SockIO):
             self.badresp('walk {0} in '
                          '{1}'.format(components, self.getpathX(fid)),
                          resp)
+        # Just because we got Rwalk does not mean we got ALL the
+        # way down the path.  Raise OSError(ENOENT) if we're short.
+        if resp.nwqid > len(components):
+            # ??? this should be impossible. Local error?  Remote error?
+            # OS Error?
+            self.clunk(newfid, ignore_error=True)
+            raise LocalError('{0}: walk {1} in {2} returned {3} '
+                             'items'.format(self, components,
+                                            self.getpathX(fid), resp.nwqid))
+        if resp.nwqid < len(components):
+            self.clunk(newfid, ignore_error=True)
+            # Looking up a/b/c and got just a/b, c is what's missing.
+            # Looking up a/b/c and got just a, b is what's missing.
+            missing = components[resp.nwqid]
+            within = _pathcat(startpath, b'/'.join(components[:resp.nwqid]))
+            raise OSError(errno.ENOENT,
+                          '{0}: {1} in {2}'.format(os.strerror(errno.ENOENT),
+                                                   missing, within))
         self.setpath(newfid, _pathcat(startpath, b'/'.join(components)))
         return newfid, resp.wqid
 

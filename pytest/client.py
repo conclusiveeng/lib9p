@@ -209,7 +209,7 @@ class TestCase(object):
     def trace(self, msg, *args, **kwargs):
         "add tracing info to log-file output"
         level = kwargs.pop('level', logging.INFO)
-        self.tstate.logger.log(logging.INFO, msg, *args, **kwargs)
+        self.tstate.logger.log(level, '      ' + msg, *args, **kwargs)
 
     def ccs(self):
         "call tstate ccs, turn socket.error connect failure into test fail"
@@ -500,8 +500,19 @@ def more_test_cases(tstate):
             qid, _ = clnt.create(clnt.rootfid, b'dir/sub',
                                  protocol.td.DMDIR | 0o777,
                                  protocol.td.OREAD)
-            tc.fail('created dir/sub as single directory with embedded slash')
             # it's not clear what happened on the server at this point!
+            tc.trace("creating dir/sub (with embedded '/') should have "
+                     'failed but did not')
+            tstate.stop = True
+            fset = clnt.uxreaddir(b'/dir')
+            if 'sub' in fset:
+                tc.trace('(found our dir/sub detritus)')
+                clnt.uxremove(b'dir/sub', force=True)
+                fset = clnt.uxreaddir(b'/dir')
+                if 'sub' not in fset:
+                    tc.trace('(successfully removed our dir/sub detritus)')
+                    tstate.stop = False
+            tc.fail('created dir/sub as single directory with embedded slash')
         except RemoteError as err:
             # we'll just assume it's the right kind of error
             tc.trace('invalid path dir/sub failed with: %s', str(err))

@@ -925,7 +925,7 @@ class P9Client(P9SockIO):
         objlist = []
         offset = 0
         while offset < len(bstring):
-            obj, offset = self.proto.unpack_dirstat(bstring, offset, noerror)
+            obj, offset = self.proto.unpack_wirestat(bstring, offset, noerror)
             objlist.append(obj)
         return objlist
 

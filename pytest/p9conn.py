@@ -911,6 +911,77 @@ class P9Client(P9SockIO):
                          resp)
         return resp.count
 
+    # Caller may
+    #  - pass an actual stat object, or
+    #  - pass in all the individual to-set items by keyword, or
+    #  - mix and match a bit: get an existing stat, then use
+    #    keywords to override fields.
+    # We convert "None"s to the internal "do not change" values,
+    # and for diagnostic purposes, can turn "do not change" back
+    # to None at the end, too.
+    def wstat(self, fid, statobj=None, **kwargs):
+        if statobj is None:
+            statobj = protocol.td.stat()
+        else:
+            statobj = statobj._copy()
+        # Fields in stat that you can't send as a wstat: the
+        # size is the size of the data object itself after
+        # encoding, and the type and qid are informative.
+        # The same holds for 'extension', it's an input when
+        # creating a file but read-only when stat-ing.
+        #
+        # It's not clear what it means to set dev, but we'll leave
+        # it in as an optional parameter here.  fs/backend.c just
+        # errors out on an attempt to change it.
+        if self.proto == protocol.plain:
+            forbid = ('size', 'type', 'qid', 'extension',
+                      'n_uid', 'n_gid', 'n_muid')
+        else:
+            forbid = ('size', 'type', 'qid', 'extension')
+        nochange = {
+            'type': 0,
+            'size': 0,
+            'qid': protocol.td.qid(0, 0, 0),
+            'dev': 2**32 - 1,
+            'mode': 2**32 - 1,
+            'atime': 2**32 - 1,
+            'mtime': 2**32 - 1,
+            'length': 2**64 - 1,
+            'name': b'',
+            'uid': b'',
+            'gid': b'',
+            'muid': b'',
+            'extension': b'',
+            'n_uid': 2**32 - 1,
+            'n_gid': 2**32 - 1,
+            'n_muid': 2**32 - 1,
+        }
+        for field in statobj._fields:
+            if field in kwargs:
+                if field in forbid:
+                    raise ValueError('cannot wstat a stat.{0}'.format(field))
+                statobj[field] = kwargs.pop(field)
+            else:
+                if field in forbid or statobj[field] is None:
+                    statobj[field] = nochange[field]
+
+        data = self.proto.pack_wirestat(statobj)
+        tag = self.get_tag()
+        pkt = self.proto.Twstat(tag=tag, fid=fid, data=data)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rwstat):
+            # For error viewing, switch all the do-not-change
+            # and can't-change fields to None.
+            statobj.qid = None
+            for field in statobj._fields:
+                if field in forbid:
+                    statobj[field] = None
+                elif field in nochange and statobj[field] == nochange[field]:
+                    statobj[field] = None
+            self.badresp('wstat {0}={1}'.format(self.getpathX(fid), statobj),
+                         resp)
+
     def readdir(self, fid, offset, count):
         "read (up to) count bytes of dir data from offset, given open fid"
         tag = self.get_tag()

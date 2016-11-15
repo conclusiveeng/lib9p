@@ -312,7 +312,7 @@ class P9Client(P9SockIO):
         self.timeout = timeout
         self.iproto = protocol.p9_version(version)
         self.may_downgrade = may_downgrade
-        self.tagalloc = numalloc.NumAlloc(0, 65535)
+        self.tagalloc = numalloc.NumAlloc(0, 65534)
         self.tagstate = {}
         # The next bit is slighlty dirty: perhaps we should just
         # allocate NOFID out of the 2**32-1 range, so as to avoid
@@ -366,10 +366,13 @@ class P9Client(P9SockIO):
         with self.lock:
             self._monkeywrench[what] = how
 
-    def get_tag(self):
+    def get_tag(self, for_Tversion=False):
         "get next available tag ID"
         with self.lock:
-            tag = self.tagalloc.alloc()
+            if for_Tversion:
+                tag = 65535
+            else:
+                tag = self.tagalloc.alloc()
             if tag is None:
                 raise LocalError('all tags in use')
             self.tagstate[tag] = True # ie, in use, still waiting
@@ -377,7 +380,7 @@ class P9Client(P9SockIO):
 
     def set_tag(self, tag, reply):
         "set the reply info for the given tag"
-        assert tag >= 0 and tag < 65535
+        assert tag >= 0 and tag < 65536
         with self.lock:
             # check whether we're still waiting for the tag
             state = self.tagstate.get(tag)
@@ -408,6 +411,8 @@ class P9Client(P9SockIO):
 
     def retire_tag(self, tag):
         "retire the given tag - only used by the thread that handled the result"
+        if tag == 65535:
+            return
         assert tag >= 0 and tag < 65535
         with self.lock:
             self.retire_tag_locked(tag)
@@ -632,7 +637,7 @@ class P9Client(P9SockIO):
         self.have_version = False
         self.rthread = threading.Thread(target=self.read_responses)
         self.rthread.start()
-        tag = self.get_tag()
+        tag = self.get_tag(for_Tversion=True)
         req = protocol.rrd.Tversion(tag=tag, msize=maxio,
                                     version=self.get_monkey('version'))
         super(P9Client, self).write(self.proto.pack_from(req))

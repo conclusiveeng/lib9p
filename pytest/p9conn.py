@@ -474,6 +474,63 @@ class P9Client(P9SockIO):
                 # Set the new path (which may be just a placeholder).
                 self.live_fids[fid] = path
 
+    def did_rename(self, fid, ncomp, oldname=None):
+        """
+        Announce that we renamed using a fid - we'll try to update
+        other fids based on this (we can't really do it perfectly).
+
+        NOTE: caller must produce only a final-component name
+        change.  The caller can supply the old name (and should
+        do so if the rename is not based on the retained path
+        for the supplied fid, i.e., for rename ops where fid
+        merely represents the top directory).  The rules:
+
+         - If oldname is None (default), we use stored path.  Else,
+         - if oldname.startswith(b'/') it provides the full old path,
+         - else it provides the tail oldpath.
+
+        (This is based on the fact that renames happen via Twstat,
+        Trename, or Trenameat, which change just one tail component,
+        but the source names vary.)
+        """
+        if ncomp is None:
+            return
+        if oldname is None:
+            opath = self.getpath(fid)
+            if opath is None:
+                return
+        else:
+            if oldname[0] == b'/':
+                opath = oldname
+            else:
+                opath = _pathcat(self.getpath(fid), oldname)
+        if opath[0] != '/':
+            return
+        ocomps = opath.split(b'/')  # e.g., ['', 'foo', 'bar']
+        oindex = len(ocomps) - 1    # e.g., 2
+        ofinal = ocomps[oindex]     # e.g., 'bar'
+        with self.lock:
+            for fid2, path2 in self.live_fids.iteritems():
+                # Skip fids without byte-string paths
+                if not isinstance(path2, bytes):
+                    continue
+                # Before splitting (which is a bit expensive), try
+                # a straightforward prefix match.  This might give
+                # some false hits, e.g., prefix /foo/bar matches
+                # /foo/bart/oops but these are different paths, but
+                # it quickly eliminates /raz/baz/mataz and the like.
+                if not path2.startswith(opath):
+                    continue
+                # check that bar==bar, not just bart startswith bar
+                parts2 = path2.split(b'/')
+                if parts2[oindex] == ofinal:
+                    # OK, path2 starts with the old (renamed) sequence.
+                    # Replace the old component with the new one.  Note
+                    # that this updates the renamed fid when we come
+                    # across it!
+                    parts2[oindex] = ncomp
+                    self.live_fids[fid2] = b'/'.join(parts2)
+
     def retire_fid(self, fid):
         "retire one fid"
         with self.lock:
@@ -986,6 +1043,9 @@ class P9Client(P9SockIO):
                     statobj[field] = None
             self.badresp('wstat {0}={1}'.format(self.getpathX(fid), statobj),
                          resp)
+        # wstat worked - change path names if needed
+        if statobj.name != b'':
+            self.did_rename(fid, statobj.name)
 
     def readdir(self, fid, offset, count):
         "read (up to) count bytes of dir data from offset, given open fid"

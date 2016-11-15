@@ -13,6 +13,7 @@ except ImportError:
     import configparser
 import functools
 import logging
+import os
 import socket
 import struct
 import sys
@@ -520,10 +521,35 @@ def more_test_cases(tstate):
     if tstate.stop:
         return
 
+    # this test should be much later, but we know the current
+    # server is broken...
     with TestCase('rename adjusts other fids', tstate) as tc:
         clnt = tc.ccs()
-        if clnt.proto < protocol.dotl or True:
-            tc.skip('applies only to 9P2000.L')
+        dirfid, _ = clnt.uxlookup(b'/dir')
+        clnt.uxmkdir(b'd1', 0o777, tstate.gid, startdir=dirfid)
+        clnt.uxmkdir(b'd1/sub', 0o777, tstate.gid, startdir=dirfid)
+        d1fid, _ = clnt.uxlookup(b'd1', dirfid)
+        subfid, _ = clnt.uxlookup(b'sub', d1fid)
+        fid, _, _, _ = clnt.uxopen(b'file', os.O_CREAT | os.O_RDWR,
+                                   0o666, startdir=subfid)
+        written = clnt.write(fid, 0, 'filedata\n')
+        if written != 9:
+            tc.trace('expected to write 9 bytes, actually wrote %d', written,
+                     level=logging.WARN)
+        # Now if we rename /dir/d1 to /dir/d2, the fids for both
+        # sub/file and sub itself should still be usable.  This
+        # holds for both Trename (Linux only) and Twstat based
+        # rename ops.
+        #
+        # Note that some servers may cache some number of files and/or
+        # diretories held open, so we should open many fids to wipe
+        # out the cache (XXX notyet).
+        clnt.wstat(d1fid, name='d2')
+        try:
+            rofid, _, _, _ = clnt.uxopen(b'file', os.O_RDONLY, startdir=subfid)
+            clnt.clunk(rofid)
+        except RemoteError as err:
+            tc.fail('open file in renamed dir/d2/sub: {0}'.format(err))
         tc.succ()
 
 if __name__ == '__main__':

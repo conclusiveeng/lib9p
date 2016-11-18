@@ -8,8 +8,10 @@ handle plan9 server <-> client connections
 This code needs some doctests or other unit tests...
 """
 
+import collections
 import errno
 import logging
+import math
 import os
 import socket
 import struct
@@ -20,7 +22,20 @@ import time
 import lerrno
 import numalloc
 import p9err
+import pfod
 import protocol
+
+# Timespec based timestamps, if present, have
+# both seconds and nanoseconds.
+Timespec = collections.namedtuple('Timespec', 'sec nsec')
+
+# File attributes from Tgetattr, or given to Tsetattr.
+# (move to protocol.py?)  We use pfod here instead of
+# namedtuple so that we can create instances with all-None
+# fields easily.
+Fileattrs = pfod.pfod('Fileattrs',
+    'ino mode uid gid nlink rdev size blksize blocks '
+    'atime mtime ctime btime gen data_version')
 
 qt2n = protocol.qid_type2name
 
@@ -1026,6 +1041,9 @@ class P9Client(P9SockIO):
             else:
                 if field in forbid or statobj[field] is None:
                     statobj[field] = nochange[field]
+        if kwargs:
+            raise TypeError('wstat() got an unexpected keyword argument '
+                            '{0!r}'.format(kwargs.popitem()))
 
         data = self.proto.pack_wirestat(statobj)
         tag = self.get_tag()
@@ -1110,6 +1128,130 @@ class P9Client(P9SockIO):
             self.badresp('mkdir {0} in '
                          '{1}'.format(name, self.getpathX(dfid)), resp)
         return resp.qid
+
+    # We don't call this getattr(), for the obvious reason.
+    def Tgetattr(self, fid, request_mask=protocol.td.GETATTR_ALL):
+        "issue Tgetattr.L - get what you ask for, or everything by default"
+        tag = self.get_tag()
+        pkt = self.proto.Tgetattr(tag=tag, fid=fid, request_mask=request_mask)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rgetattr):
+            self.badresp('Tgetattr {0} of '
+                         '{1}'.format(request_mask, self.getpathX(fid)), resp)
+        attrs = Fileattrs()
+        # Handle the simplest valid-bit tests:
+        for name in ('mode', 'nlink', 'uid', 'gid', 'rdev',
+                     'size', 'blocks', 'gen', 'data_version'):
+            bit = getattr(protocol.td, 'GETATTR_' + name.upper())
+            if resp.valid & bit:
+                attrs[name] = resp[name]
+        # Handle the timestamps, which are timespec pairs
+        for name in ('atime', 'mtime', 'ctime', 'btime'):
+            bit = getattr(protocol.td, 'GETATTR_' + name.upper())
+            if resp.valid & bit:
+                attrs[name] = Timespec(sec=resp[name + '_sec'],
+                                       nsec=resp[name + '_nsec'])
+        # There is no control bit for blksize; qemu and Linux always
+        # provide one.
+        attrs.blksize = resp.blksize
+        # Handle ino, which comes out of qid.path
+        if resp.valid & protocol.td.GETATTR_INO:
+            attrs.ino = resp.qid.path
+        return attrs
+
+    # We don't call this setattr(), for the obvious reason.
+    # See wstat for usage.  Note that time fields can be set
+    # with either second or nanosecond resolutions, and some
+    # can be set without supplying an actual timestamp, so
+    # this is all pretty ad-hoc.
+    #
+    # There's also one keyword-only argument, ctime=<anything>,
+    # which means "set SETATTR_CTIME".  This has the same effect
+    # as supplying valid=protocol.td.SETATTR_CTIME.
+    def Tsetattr(self, fid, valid=0, attrs=None, **kwargs):
+        if attrs is None:
+            attrs = Fileattrs()
+        else:
+            attrs = attrs._copy()
+
+        # Start with an empty (all-zero) Tsetattr instance.  We
+        # don't really need to zero out tag and fid, but it doesn't
+        # hurt.  Note that if caller says, e.g., valid=SETATTR_SIZE
+        # but does not supply an incoming size (via "attrs" or a size=
+        # argument), we'll ask to set that field to 0.
+        attrobj = protocol.rrd.Tsetattr()
+        for field in attrobj._fields:
+            attrobj[field] = 0
+
+        # In this case, forbid means "only as kwargs": these values
+        # in an incoming attrs object are merely ignored.
+        forbid = ('ino', 'nlink', 'rdev', 'blksize', 'blocks', 'btime',
+                  'gen', 'data_version')
+        for field in attrs._fields:
+            if field in kwargs:
+                if field in forbid:
+                    raise ValueError('cannot Tsetattr {0}'.format(field))
+                attrs[field] = kwargs.pop(field)
+            elif attrs[field] is None:
+                continue
+            # OK, we're setting this attribute.  Many are just
+            # numeric - if that's the case, we're good, set the
+            # field and the appropriate bit.
+            bitname = 'SETATTR_' + field.upper()
+            bit = getattr(protocol.td, bitname)
+            if field in ('mode', 'uid', 'gid', 'size'):
+                valid |= bit
+                attrobj[field] = attrs[field]
+                continue
+            # Timestamps are special:  The value may be given as
+            # an integer (seconds), or as a float (we convert to
+            # (we convert to sec+nsec), or as a timespec (sec+nsec).
+            # If specified as 0, we mean "we are not providing the
+            # actual time, use the server's time."
+            #
+            # The ctime field's value, if any, is *ignored*.
+            if field in ('atime', 'mtime'):
+                value = attrs[field]
+                if hasattr(value, '__len__'):
+                    if len(value) != 2:
+                        raise ValueError('invalid {0}={1!r}'.format(field,
+                                                                    value))
+                    sec = value[0]
+                    nsec = value[1]
+                else:
+                    sec = value
+                    if isinstance(sec, float):
+                        nsec, sec = math.modf(sec)
+                        nsec = int(round(nsec * 1000000000))
+                    else:
+                        nsec = 0
+                valid |= bit
+                attrobj[field + '_sec'] = sec
+                attrobj[field + '_nsec'] = nsec
+                if sec != 0 or nsec != 0:
+                    # Add SETATTR_ATIME_SET or SETATTR_MTIME_SET
+                    # as appropriate, to tell the server to *this
+                    # specific* time, instead of just "server now".
+                    bit = getattr(protocol.td, bitname + '_SET')
+                    valid |= bit
+        if 'ctime' in kwargs:
+            kwargs.pop('ctime')
+            valid |= protocol.td.SETATTR_CTIME
+        if kwargs:
+            raise TypeError('Tsetattr() got an unexpected keyword argument '
+                            '{0!r}'.format(kwargs.popitem()))
+
+        tag = self.get_tag()
+        attrobj.valid = valid
+        attrobj.tag = tag
+        attrobj.fid = fid
+        pkt = self.proto.pack(attrobj)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rsetattr):
+            self.badresp('Tsetattr {0} {1} of '
+                         '{2}'.format(valid, attrs, self.getpathX(fid)), resp)
 
     def _pathsplit(self, path, startdir, allow_empty=False):
         "common code for uxlookup and uxopen"

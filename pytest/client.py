@@ -521,6 +521,39 @@ def more_test_cases(tstate):
     if tstate.stop:
         return
 
+    with TestCase('getattr/setattr', tstate) as tc:
+        # This test is not really thorough enough, need to test
+        # all combinations of settings.  Should also test that
+        # old values are restored on failure, although it is not
+        # clear how to trigger failures.
+        clnt = tc.ccs()
+        if not clnt.supports(protocol.td.Tgetattr):
+            tc.skip('%s does not support Tgetattr', clnt)
+        fid, _, _, _ = clnt.uxopen(b'/dir/file', os.O_CREAT | os.O_RDWR, 0o666)
+        written = clnt.write(fid, 0, 'bytes\n')
+        if written != 6:
+            tc.trace('expected to write 6 bytes, actually wrote %d', written,
+                     level=logging.WARN)
+        attrs = clnt.Tgetattr(fid)
+        #tc.trace('getattr: after write, before setattr: got %s', attrs)
+        if attrs.size != written:
+            tc.fail('getattr: expected size=%d, got size=%d',
+                    written, attrs.size)
+        # now truncate, set mtime to (3,14), and check result
+        set_time_to = p9conn.Timespec(sec=0, nsec=140000000)
+        clnt.Tsetattr(fid, size=0, mtime=set_time_to)
+        attrs = clnt.Tgetattr(fid)
+        #tc.trace('getattr: after setattr: got %s', attrs)
+        if attrs.mtime.sec != set_time_to.sec or attrs.size != 0:
+            tc.fail('setattr: expected to get back mtime.sec={0}, size=0; '
+                    'got mtime.sec={1}, size='
+                    '{1}'.format(set_time_to.sec, attrs.mtime.sec, attrs.size))
+        # nsec is not as stable but let's check
+        if attrs.mtime.nsec != set_time_to.nsec:
+            tc.trace('setattr: expected to get back mtime_nsec=%d; '
+                     'got %d', set_time_to.nsec, mtime_nsec)
+        tc.succ('able to set and see size and mtime')
+
     # this test should be much later, but we know the current
     # server is broken...
     with TestCase('rename adjusts other fids', tstate) as tc:

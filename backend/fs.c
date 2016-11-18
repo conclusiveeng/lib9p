@@ -2270,7 +2270,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 		}
 	}
 
-	if (mask & (L9PL_SETATTR_ATIME | L9PL_SETATTR_CTIME)) {
+	if (mask & (L9PL_SETATTR_ATIME | L9PL_SETATTR_MTIME)) {
 		tv[0].tv_sec = st.st_atimespec.tv_sec;
 		tv[0].tv_usec = (int)st.st_atimespec.tv_nsec / 1000;
 		tv[1].tv_sec = st.st_mtimespec.tv_sec;

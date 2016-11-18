@@ -721,8 +721,8 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 		l9p_pu32(msg, &fcall->tsetattr.gid);
 		l9p_pu64(msg, &fcall->tsetattr.size);
 		l9p_pu64(msg, &fcall->tsetattr.atime_sec);
-		l9p_pu64(msg, &fcall->tsetattr.mtime_nsec);
-		l9p_pu64(msg, &fcall->tsetattr.atime_sec);
+		l9p_pu64(msg, &fcall->tsetattr.atime_nsec);
+		l9p_pu64(msg, &fcall->tsetattr.mtime_sec);
 		r = l9p_pu64(msg, &fcall->tsetattr.mtime_nsec);
 		break;
 

@@ -585,6 +585,26 @@ def more_test_cases(tstate):
             tc.fail('open file in renamed dir/d2/sub: {0}'.format(err))
         tc.succ()
 
+    # Even if xattrwalk is supported by the protocol, it's optional
+    # on the server.
+    with TestCase('xattrwalk', tstate) as tc:
+        clnt = tc.ccs()
+        if not clnt.supports(protocol.td.Txattrwalk):
+            tc.skip('{0} does not support Txattrwalk'.format(clnt))
+        dirfid, _ = clnt.uxlookup(b'/dir')
+        try:
+            # need better tests...
+            attrfid, size = clnt.xattrwalk(dirfid)
+            data = clnt.read(attrfid, 0, size)
+            tc.trace('xattrwalk with no name: data=%r', data)
+            clnt.clunk(attrfid)
+            clnt.clunk(dirfid)
+            tc.succ('xattrwalk size={0} datalen={1}'.format(size, len(data)))
+        except RemoteError as err:
+            tc.trace('xattrwalk on /dir: {0}'.format(err))
+        clnt.clunk(dirfid)
+        tc.succ('xattrwalk apparently not implemented')
+
 if __name__ == '__main__':
     try:
         sys.exit(main())

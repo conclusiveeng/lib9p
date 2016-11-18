@@ -1253,6 +1253,24 @@ class P9Client(P9SockIO):
             self.badresp('Tsetattr {0} {1} of '
                          '{2}'.format(valid, attrs, self.getpathX(fid)), resp)
 
+    def xattrwalk(self, fid, name=None):
+        "walk one name or all names: caller should read() the returned fid"
+        tag = self.get_tag()
+        newfid = self.alloc_fid()
+        pkt = self.proto.Txattrwalk(tag=tag, fid=fid, newfid=newfid,
+                                    name=name or '')
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rxattrwalk):
+            self.retire_fid(newfid)
+            self.badresp('Txattrwalk {0} of '
+                         '{1}'.format(name, self.getpathX(fid)), resp)
+        if name:
+            self.setpath(newfid, 'xattr:' + name)
+        else:
+            self.setpath(newfid, 'xattr')
+        return newfid, resp.size
+
     def _pathsplit(self, path, startdir, allow_empty=False):
         "common code for uxlookup and uxopen"
         if self.rootfid is None:

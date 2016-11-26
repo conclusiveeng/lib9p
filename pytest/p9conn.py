@@ -1002,22 +1002,20 @@ class P9Client(P9SockIO):
         else:
             statobj = statobj._copy()
         # Fields in stat that you can't send as a wstat: the
-        # size is the size of the data object itself after
-        # encoding, and the type and qid are informative.
-        # The same holds for 'extension', it's an input when
-        # creating a file but read-only when stat-ing.
+        # type and qid are informative.  Similarly, the
+        # 'extension' is an input when creating a file but
+        # read-only when stat-ing.
         #
         # It's not clear what it means to set dev, but we'll leave
         # it in as an optional parameter here.  fs/backend.c just
         # errors out on an attempt to change it.
         if self.proto == protocol.plain:
-            forbid = ('size', 'type', 'qid', 'extension',
+            forbid = ('type', 'qid', 'extension',
                       'n_uid', 'n_gid', 'n_muid')
         else:
-            forbid = ('size', 'type', 'qid', 'extension')
+            forbid = ('type', 'qid', 'extension')
         nochange = {
             'type': 0,
-            'size': 0,
             'qid': protocol.td.qid(0, 0, 0),
             'dev': 2**32 - 1,
             'mode': 2**32 - 1,

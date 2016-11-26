@@ -5,7 +5,7 @@ on server (assumes BSD style LD_LIBRARY_PATH):
 
 mkdir /tmp/foo
 cd lib9p
-env LD_LIBRARY_PATH=. example/server -h localhost -p 12345 /tmp/foo
+env LD_LIBRARY_PATH=. LIB9P_LOGGING=stderr example/server -h localhost -p 12345 /tmp/foo
 
 (this can be run as a non-root user for now, but some things
 only work when run as root)

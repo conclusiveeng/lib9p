@@ -1520,8 +1520,11 @@ class P9Client(P9SockIO):
                 bstring = self.readdir(fid, offset, iounit)
                 if bstring == b'':
                     break
-                dirents.extend(self.decode_readdir_dirents(bstring))
-                offset += len(bstring)
+                ents = self.decode_readdir_dirents(bstring)
+                if len(ents) == 0:
+                    break               # ???
+                dirents.extend(ents)
+                offset = ents[-1].offset
         finally:
             self.clunk(fid, ignore_error=True)
         return dirents

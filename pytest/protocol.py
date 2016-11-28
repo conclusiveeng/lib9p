@@ -738,13 +738,18 @@ class _P9Proto(object):
         # we can always proceed if we support fcall.
         if self.supports(fcall):
             fcall = fcall_names[fcall]
+            cls = getattr(rrd, fcall)
+            seq = self.pfods[cls].seq
+        elif fcall == td.Rlerror:
+            # As a special case for diod, we accept Rlerror even
+            # if it's not formally part of the protocol.
+            cls = rrd.Rlerror
+            seq = dotl.pfods[rrd.Rlerror].seq
         else:
             fcall = fcall_names.get(fcall, fcall)
             raise SequenceError('invalid fcall {0!r} for '
                                 '{1}'.format(fcall, self))
-        cls = getattr(rrd, fcall)
         vdict = cls()
-        seq = self.pfods[cls].seq
         seq.unpack(vdict, self.conditions, data, noerror)
         return vdict
 

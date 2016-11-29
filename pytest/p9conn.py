@@ -1610,20 +1610,21 @@ class P9Client(P9SockIO):
             return
         if qid.type == protocol.td.QTDIR:
             # it's a directory, remove only if allowed.
-            # Note that we must check for "rm -r /" (len(compoents)==0).
+            # Note that we must check for "rm -r /" (len(components)==0).
             if filetype == 'file':
                 raise OSError(_wrong_file_type(qid),
                               '{0}: is dir, expected file'.format(path))
-            finalfunc = self.remove if len(components) else self.clunk
+            isroot = len(components) == 0
+            closer = self.clunk if isroot else self.remove
             if recurse:
                 try:
-                    self._rm_recursive(fid, filetype, force)
-                finally:
-                    finalfunc(fid, ignore_error=force)
+                    self._rm_recursive(fid, filetype, force, closer)
+                except OSError:
+                    closer(fid, ignore_error=force)
                 return
             # This will fail if the directory is non-empty, unless of
             # course we tell it to ignore error.
-            finalfunc(fid, ignore_error=force)
+            closer(fid, ignore_error=force)
             return
         # Not a directory, call it a file (even if socket or fifo etc).
         if filetype == 'dir':
@@ -1661,24 +1662,42 @@ class P9Client(P9SockIO):
             return
         self.remove(fid, ignore_error=force)
 
-    def _rm_recursive(self, dfid, filetype, force):
+    def _rm_recursive(self, dfid, filetype, force, closer):
         """
         Recursively remove a directory.  filetype is probably None,
         but if it's 'dir' we fail if the directory contains non-dir
         files.
 
         If force is set, ignore failures.
+
+        Use closer() (which is self.clunk or self.remove as
+        appropriate) to close off the fid once we're done with it.
+        This lets us avoid attempting self.remove() on a fid that
+        is the root of the tree.
         """
         # first, remove contents
-        for stat in self.uxreaddir_stat_fid(self.dupfid(dfid)):
-            # skip . and ..
-            name = stat.name
-            if name in (b'.', b'..'):
-                continue
-            if stat.qid.type == protocol.td.QTDIR:
-                self.uxremove(name, dfid, filetype, force, True)
-            else:
-                self._rm_file_by_dfid(dfid, name, force)
+        if self.supports_all(protocol.td.Tlopen, protocol.td.Treaddir):
+            for entry in self.uxreaddir_dotl_fid(self.dupfid(dfid)):
+                if entry.name in (b'.', b'..'):
+                    continue
+                fid, qid = self.lookup(dfid, [entry.name])
+                attrs = self.Tgetattr(fid, protocol.td.GETATTR_MODE)
+                if stat.S_ISDIR(attrs.mode):
+                    self.uxremove(entry.name, dfid, filetype, force, True)
+                else:
+                    self._rm_file_by_dfid(dfid, entry.name, force)
+        else:
+            for statobj in self.uxreaddir_stat_fid(self.dupfid(dfid)):
+                # skip . and ..
+                name = statobj.name
+                if name in (b'.', b'..'):
+                    continue
+                if statobj.qid.type == protocol.td.QTDIR:
+                    self.uxremove(name, dfid, filetype, force, True)
+                else:
+                    self._rm_file_by_dfid(dfid, name, force)
+        # Finally, close (clunk or remove) the directory.
+        closer(dfid, ignore_error=force)
 
 def _wrong_file_type(qid):
     "return EISDIR or ENOTDIR for passing to OSError"

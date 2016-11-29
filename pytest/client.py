@@ -185,6 +185,8 @@ class TestCase(object):
         self.detail = None
         self.tstate = tstate
         self._shutdown = None
+        self._autoclunk = None
+        self._acconn = None
 
     def auto_disconnect(self, conn):
         self._shutdown = conn
@@ -207,6 +209,12 @@ class TestCase(object):
         self.detail = detail
         raise TCDone()
 
+    def autoclunk(self, fid):
+        "mark fid to be closed/clunked on test exit"
+        if self._acconn is None:
+            raise ValueError('autoclunk: no _acconn')
+        self._autoclunk.append(fid)
+
     def trace(self, msg, *args, **kwargs):
         "add tracing info to log-file output"
         level = kwargs.pop('level', logging.INFO)
@@ -218,12 +226,14 @@ class TestCase(object):
             self.detail = 'connecting'
             ret = self.tstate.ccs()
             self.detail = None
+            self._acconn = ret
             return ret
         except socket.error as err:
             self.fail(str(err))
 
     def __enter__(self):
         self.tstate.logger.log(logging.DEBUG, 'ENTER: %s', self.name)
+        self._autoclunk = []
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -268,6 +278,8 @@ class TestCase(object):
         if tb_detail:
             for line in tb_detail:
                 tstate.logger.log(level, '      %s', line.rstrip())
+        for fid in self._autoclunk:
+            self._acconn.clunk(fid, ignore_error=True)
         if self._shutdown:
             self._shutdown.shutdown()
         return eat_exc
@@ -445,9 +457,9 @@ def more_test_cases(tstate):
         clnt = tc.ccs()
         try:
             fid, qid = clnt.lookup(clnt.rootfid, [b'/'])
+            tc.autoclunk(fid)
         except RemoteError as err:
             tc.succ(err.args[0])
-        clnt.clunk(fid)
         tc.fail('/ in lookup component name not rejected')
 
     # Proceed from a clean tree.  As a side effect, this also tests
@@ -489,6 +501,7 @@ def more_test_cases(tstate):
             tc.skip('cannot test dot-L mkdir on {0}'.format(clnt.proto))
         try:
             fid, qid = clnt.uxlookup(b'/dir', None)
+            tc.autoclunk(fid)
             tstate.stop = True
             tc.fail('found existing /dir after cleaning tree')
         except RemoteError as err:
@@ -541,6 +554,7 @@ def more_test_cases(tstate):
             tc.skip('%s does not support Tgetattr', clnt)
         fid, _, _, _ = clnt.uxopen(b'/dir/file', os.O_CREAT | os.O_RDWR, 0o666,
             gid=tstate.gid)
+        tc.autoclunk(fid)
         written = clnt.write(fid, 0, 'bytes\n')
         if written != 6:
             tc.trace('expected to write 6 bytes, actually wrote %d', written,
@@ -570,12 +584,16 @@ def more_test_cases(tstate):
     with TestCase('rename adjusts other fids', tstate) as tc:
         clnt = tc.ccs()
         dirfid, _ = clnt.uxlookup(b'/dir')
+        tc.autoclunk(dirfid)
         clnt.uxmkdir(b'd1', 0o777, tstate.gid, startdir=dirfid)
         clnt.uxmkdir(b'd1/sub', 0o777, tstate.gid, startdir=dirfid)
         d1fid, _ = clnt.uxlookup(b'd1', dirfid)
+        tc.autoclunk(d1fid)
         subfid, _ = clnt.uxlookup(b'sub', d1fid)
+        tc.autoclunk(subfid)
         fid, _, _, _ = clnt.uxopen(b'file', os.O_CREAT | os.O_RDWR,
                                    0o666, startdir=subfid, gid=tstate.gid)
+        tc.autoclunk(fid)
         written = clnt.write(fid, 0, 'filedata\n')
         if written != 9:
             tc.trace('expected to write 9 bytes, actually wrote %d', written,
@@ -606,17 +624,16 @@ def more_test_cases(tstate):
         if not clnt.supports(protocol.td.Txattrwalk):
             tc.skip('{0} does not support Txattrwalk'.format(clnt))
         dirfid, _ = clnt.uxlookup(b'/dir')
+        tc.autoclunk(dirfid)
         try:
             # need better tests...
             attrfid, size = clnt.xattrwalk(dirfid)
+            tc.autoclunk(attrfid)
             data = clnt.read(attrfid, 0, size)
             tc.trace('xattrwalk with no name: data=%r', data)
-            clnt.clunk(attrfid)
-            clnt.clunk(dirfid)
             tc.succ('xattrwalk size={0} datalen={1}'.format(size, len(data)))
         except RemoteError as err:
             tc.trace('xattrwalk on /dir: {0}'.format(err))
-        clnt.clunk(dirfid)
         tc.succ('xattrwalk apparently not implemented')
 
 if __name__ == '__main__':

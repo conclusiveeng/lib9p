@@ -396,7 +396,7 @@ def main():
     try:
         if not tstate.stop:
             # Various Linux tests need gids.  Just get them for everyone.
-            tstate.gid = getint(tstate.config, None, 'gid', 0)
+            tstate.gid = getint(tstate.config, 'client', 'gid', 0)
             more_test_cases(tstate)
     finally:
         tstate.dcc()
@@ -451,13 +451,14 @@ def more_test_cases(tstate):
         tc.fail('/ in lookup component name not rejected')
 
     # Proceed from a clean tree.  As a side effect, this also tests
-    # at least the old style readdir (read() on a directory fid).
+    # either the old style readdir (read() on a directory fid) or
+    # the dot-L readdir().
     #
     # The test case will fail if we don't have permission to remove
     # some file(s).
     with TestCase('clean up tree (readdir+remove)', tstate) as tc:
         clnt = tc.ccs()
-        fset = clnt.uxreaddir(b'/', no_dotl=True)
+        fset = clnt.uxreaddir(b'/')
         fset = [i for i in fset if i != '.' and i != '..']
         tc.trace("what's there initially: {0!r}".format(fset))
         try:
@@ -467,7 +468,7 @@ def more_test_cases(tstate):
             tc.trace('this might be a permissions error', level=logging.ERROR)
             tstate.stop = True
             tc.fail(str(err))
-        fset = clnt.uxreaddir(b'/', no_dotl=True)
+        fset = clnt.uxreaddir(b'/')
         fset = [i for i in fset if i != '.' and i != '..']
         tc.trace("what's left after removing everything: {0!r}".format(fset))
         if fset:
@@ -481,8 +482,11 @@ def more_test_cases(tstate):
     # Name supplied to create, mkdir, etc, may not contain /.
     # Note that this test may fail for the wrong reason if /dir
     # itself does not already exist, so first let's make /dir.
+    only_dotl = getbool(tstate.config, 'client', 'only_dotl', False)
     with TestCase('mkdir', tstate) as tc:
         clnt = tc.ccs()
+        if only_dotl and not clnt.supports(protocol.td.Tmkdir):
+            tc.skip('cannot test dot-L mkdir on {0}'.format(clnt.proto))
         try:
             fid, qid = clnt.uxlookup(b'/dir', None)
             tstate.stop = True
@@ -490,17 +494,23 @@ def more_test_cases(tstate):
         except RemoteError as err:
             # we'll just assume it's "no such file or directory"
             pass
-        qid, _ = clnt.create(clnt.rootfid, b'dir',
-                             protocol.td.DMDIR | 0o777,
-                             protocol.td.OREAD)
+        if only_dotl:
+            qid = clnt.mkdir(clnt.rootfid, b'dir', 0o777, tstate.gid)
+        else:
+            qid, _ = clnt.create(clnt.rootfid, b'dir',
+                                 protocol.td.DMDIR | 0o777,
+                                 protocol.td.OREAD)
         if qid.type != protocol.td.QTDIR:
             tstate.stop = True
             tc.fail('creating /dir: result is not a directory')
         tc.trace('now attempting to create /dir/sub the wrong way')
         try:
-            qid, _ = clnt.create(clnt.rootfid, b'dir/sub',
-                                 protocol.td.DMDIR | 0o777,
-                                 protocol.td.OREAD)
+            if only_dotl:
+                qid = clnt.mkdir(clnt.rootfid, b'dir/sub', 0o777, tstate.gid)
+            else:
+                qid, _ = clnt.create(clnt.rootfid, b'dir/sub',
+                                     protocol.td.DMDIR | 0o777,
+                                     protocol.td.OREAD)
             # it's not clear what happened on the server at this point!
             tc.trace("creating dir/sub (with embedded '/') should have "
                      'failed but did not')
@@ -529,7 +539,8 @@ def more_test_cases(tstate):
         clnt = tc.ccs()
         if not clnt.supports(protocol.td.Tgetattr):
             tc.skip('%s does not support Tgetattr', clnt)
-        fid, _, _, _ = clnt.uxopen(b'/dir/file', os.O_CREAT | os.O_RDWR, 0o666)
+        fid, _, _, _ = clnt.uxopen(b'/dir/file', os.O_CREAT | os.O_RDWR, 0o666,
+            gid=tstate.gid)
         written = clnt.write(fid, 0, 'bytes\n')
         if written != 6:
             tc.trace('expected to write 6 bytes, actually wrote %d', written,
@@ -564,7 +575,7 @@ def more_test_cases(tstate):
         d1fid, _ = clnt.uxlookup(b'd1', dirfid)
         subfid, _ = clnt.uxlookup(b'sub', d1fid)
         fid, _, _, _ = clnt.uxopen(b'file', os.O_CREAT | os.O_RDWR,
-                                   0o666, startdir=subfid)
+                                   0o666, startdir=subfid, gid=tstate.gid)
         written = clnt.write(fid, 0, 'filedata\n')
         if written != 9:
             tc.trace('expected to write 9 bytes, actually wrote %d', written,
@@ -577,7 +588,10 @@ def more_test_cases(tstate):
         # Note that some servers may cache some number of files and/or
         # diretories held open, so we should open many fids to wipe
         # out the cache (XXX notyet).
-        clnt.wstat(d1fid, name='d2')
+        if clnt.supports(protocol.td.Trename):
+            clnt.rename(d1fid, dirfid, name=b'd2')
+        else:
+            clnt.wstat(d1fid, name=b'd2')
         try:
             rofid, _, _, _ = clnt.uxopen(b'file', os.O_RDONLY, startdir=subfid)
             clnt.clunk(rofid)

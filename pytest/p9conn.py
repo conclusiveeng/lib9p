@@ -14,6 +14,7 @@ import logging
 import math
 import os
 import socket
+import stat
 import struct
 import sys
 import threading
@@ -1351,11 +1352,14 @@ class P9Client(P9SockIO):
         components, startdir = self._pathsplit(path, startdir, allow_empty=True)
         return self.lookup_last(startdir, components)
 
-    def uxopen(self, path, oflags=0, perm=None, startdir=None, filetype=None):
+    def uxopen(self, path, oflags=0, perm=None, gid=None,
+               startdir=None, filetype=None):
         """
         Unix-style open()-with-option-to-create, or mkdir().
         oflags is 0/1/2 with optional os.O_CREAT, perm defaults
-        to 0o666 (files) or 0o777 (directories).
+        to 0o666 (files) or 0o777 (directories).  If we use
+        a Linux create or mkdir op, we will need a gid, but it's
+        not required if you are opening an existing file.
 
         Adds a final boolean value for "did we actually create".
         Raises OSError if you ask for a directory but it's a file,
@@ -1379,6 +1383,11 @@ class P9Client(P9SockIO):
             # If we got this far, use Topen on the fid; we did not
             # create the file.
             return self._uxopen2(path, needtype, fid, qid, omode_byte, False)
+
+        # Only used if using dot-L, but make sure it's always provided
+        # since this is generic.
+        if gid is None:
+            raise ValueError('gid is required when creating file or dir')
 
         if len(components) > 1:
             # Look up all but last component; this part must succeed.
@@ -1406,16 +1415,34 @@ class P9Client(P9SockIO):
             qid = resp.wqid[0]
             return self._uxopen2(needtype, fid, qid, omode_byte, False)
 
-        # Walk failed.  If we allocated a fid, retire it.  Then
-        # dup the parent directory, since we're using the old style
-        # create, which will overwrite the fid.
+        # Walk failed.  If we allocated a fid, retire it.  Then dup
+        # startdir if we're creating a file, since the create will
+        # overwrite the fid.
         if fid != startdir:
             self.retire_fid(fid)
-        fid = self.dupfid(startdir)
+        if filetype == 'dir':
+            fid = None
+        else:
+            fid = self.dupfid(startdir)
+
         # Try to create or mkdir as appropriate.
-        if perm is None:
-            perm = protocol.td.DMDIR | 0o777 if filetype == 'dir' else 0o666
-        qid, iounit = self.create(fid, components[0], perm, omode_byte)
+        if self.supports_all(protocol.td.Tlcreate, protocol.td.Tmkdir):
+            # Use Linux style create / mkdir.
+            if filetype == 'dir':
+                if perm is None:
+                    perm = 0o777
+                qid = self.mkdir(startdir, components[0], perm, gid)
+                iounit = None
+            else:
+                if perm is None:
+                    perm = 0o666
+                lflags = flags_to_linux_flags(oflags)
+                qid, iounit = self.lcreate(fid, components[0],
+                                           lflags, perm, gid)
+        else:
+            if perm is None:
+                perm = protocol.td.DMDIR | 0o777 if filetype == 'dir' else 0o666
+            qid, iounit = self.create(fid, components[0], perm, omode_byte)
 
         # Success.  If we created an ordinary file, we have everything
         # now as create alters the incoming (dir) fid to open the file.
@@ -1434,8 +1461,9 @@ class P9Client(P9SockIO):
                                                       qt2n(qid.type)))
 
         # Success: created dir; but now need to walk to and open it.
+        fid = self.alloc_fid()
         tag = self.get_tag()
-        pkt = self.proto.Twalk(tag=tag, fid=fid, newfid=fid,
+        pkt = self.proto.Twalk(tag=tag, fid=startdir, newfid=fid,
                                nwname=1, wname=components)
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
@@ -1503,7 +1531,7 @@ class P9Client(P9SockIO):
             no_dotl = True
         if no_dotl:
             statvals = self.uxreaddir_stat_fid(fid)
-            return [stat.name for stat in statvals]
+            return [i.name for i in statvals]
 
         dirents = self.uxreaddir_dotl_fid(fid)
         return [dirent.name for dirent in dirents]

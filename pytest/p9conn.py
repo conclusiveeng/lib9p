@@ -1425,8 +1425,6 @@ class P9Client(P9SockIO):
         # Note that qid type should match "needtype".
         if filetype != 'dir':
             if qid.type == needtype:
-                self.setpath(fid,
-                             _pathcat(self.getpath(startdir), components[0]))
                 return fid, qid, iounit, True
             self.clunk(fid, ignore_error=True)
             raise OSError(_wrong_file_type(qid),

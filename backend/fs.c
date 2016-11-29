@@ -47,6 +47,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <libgen.h>
+#include <pthread.h>
 #include "../lib9p.h"
 #include "../lib9p_impl.h"
 #include "../fid.h"
@@ -88,6 +89,7 @@ struct fs_fid {
 	int	ff_fd;
 	char	*ff_name;
 	struct fs_authinfo *ff_ai;
+	pthread_mutex_t ff_mtx;
 };
 
 /*
@@ -548,6 +550,7 @@ open_fid(const char *path, struct fs_authinfo *ai)
 	struct fs_fid *ret;
 
 	ret = l9p_calloc(1, sizeof(*ret));
+	pthread_mutex_init(&ret->ff_mtx, NULL);
 	ret->ff_fd = -1;
 	ret->ff_name = strdup(path);
 	if (ret->ff_name == NULL) {
@@ -1476,6 +1479,8 @@ fs_read(void *softc __unused, struct l9p_request *req)
 		struct l9p_message msg;
 		long o;
 
+		pthread_mutex_lock(&file->ff_mtx);
+
 		/*
 		 * Must use telldir before readdir since seekdir
 		 * takes cookie values.  Unfortunately this wastes
@@ -1508,6 +1513,8 @@ fs_read(void *softc __unused, struct l9p_request *req)
 			(void) readdir(file->ff_dir);
 #endif
 		}
+
+		pthread_mutex_unlock(&file->ff_mtx);
 	} else {
 		size_t niov = l9p_truncate_iov(req->lr_data_iov,
                     req->lr_data_niov, req->lr_req.io.count);
@@ -2339,6 +2346,8 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 	if (file->ff_dir == NULL)
 		return (ENOTDIR);
 
+	pthread_mutex_lock(&file->ff_mtx);
+
 	/*
 	 * There is no getdirentries variant that accepts an
 	 * offset, so once we are multithreaded, this will need
@@ -2388,6 +2397,7 @@ fs_readdir(void *softc __unused, struct l9p_request *req)
 			break;
 	}
 
+	pthread_mutex_unlock(&file->ff_mtx);
 	req->lr_resp.io.count = (uint32_t)msg.lm_size;
 	return (error);
 }
@@ -2651,6 +2661,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	rroot = realpath(root, NULL);
 	if (rroot == NULL)
 		return (-1);
+
 	backend = l9p_malloc(sizeof(*backend));
 	backend->attach = fs_attach;
 	backend->clunk = fs_clunk;

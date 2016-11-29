@@ -40,6 +40,7 @@ LIB_SRCS := \
 	hashtable.c \
 	utils.c \
 	rfuncs.c \
+	threadpool.c \
 	sbuf/sbuf.c \
 	transport/socket.c \
 	backend/fs.c

@@ -784,6 +784,7 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rattach):
+            self.retire_fid(fid)
             self.badresp('attach', resp)
         # probably should check resp.qid
         self.rootfid = fid

@@ -1552,13 +1552,9 @@ fs_remove(void *softc, struct l9p_fid *fid)
 		return (error);
 
 	file = fid->lo_aux;
-	if (S_ISDIR(st.st_mode)) {
-		if (rmdir(file->ff_name) != 0)
-			error = errno;
-	} else {
-		if (unlink(file->ff_name) != 0)
-			error = errno;
-	}
+	/* saved stat data in "st" is for parent dir, hence useless here */
+	if (remove(file->ff_name) != 0)
+		error = errno;
 
 	return (error);
 }

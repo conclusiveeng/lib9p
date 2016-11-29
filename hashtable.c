@@ -161,11 +161,11 @@ ht_remove_at_iter(struct ht_iter *iter)
 void
 ht_iter(struct ht *h, struct ht_iter *iter)
 {
-	pthread_rwlock_rdlock(&iter->htit_parent->ht_rwlock);
+	pthread_rwlock_rdlock(&h->ht_rwlock);
 	iter->htit_parent = h;
 	iter->htit_slot = 0;
 	iter->htit_cursor = TAILQ_FIRST(&h->ht_entries[0].hte_items);
-	pthread_rwlock_unlock(&iter->htit_parent->ht_rwlock);
+	pthread_rwlock_unlock(&h->ht_rwlock);
 }
 
 void *

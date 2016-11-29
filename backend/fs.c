@@ -2644,6 +2644,7 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 	if (f->ff_dir)
 		closedir(f->ff_dir);
 
+	pthread_mutex_destroy(&f->ff_mtx);
 	free(f->ff_name);
 	ai = f->ff_ai;
 	free(f);

@@ -572,6 +572,9 @@ class P9Client(P9SockIO):
 
     def retire_all_fids(self):
         "return live fids to pool"
+        # this is useful for debugging fid leaks:
+        #for fid in self.live_fids:
+        #    print 'retiring', fid, self.getpathX(fid)
         with self.lock:
             self.fidalloc.free_multi(self.live_fids.keys())
             self.live_fids = {}
@@ -793,6 +796,8 @@ class P9Client(P9SockIO):
 
     def shutdown(self):
         "disconnect from server"
+        if self.rootfid is not None:
+            self.clunk(self.rootfid, ignore_error=True)
         self.retire_all_tags()
         self.retire_all_fids()
         self.rootfid = None
@@ -1395,11 +1400,14 @@ class P9Client(P9SockIO):
             fid, _ = self.lookup(startdir, components[:-1])
 
             # Now proceed with the final component, using fid
-            # as the start dir.
+            # as the start dir.  Remember to clunk it!
             startdir = fid
+            clunk_startdir = True
             components = components[-1:]
         else:
             # Use startdir as the start dir, and get a new fid.
+            # Do not clunk startdir!
+            clunk_startdir = False
             fid = self.alloc_fid()
 
         # Now look up the (single) component.  If this fails,
@@ -1410,70 +1418,93 @@ class P9Client(P9SockIO):
         super(P9Client, self).write(pkt)
         resp = self.wait_for(tag)
         if isinstance(resp, protocol.rrd.Rwalk):
+            if clunk_startdir:
+                self.clunk(startdir, ignore_error=True)
             # fid successfully walked to refer to final component.
             # Just need to actually open the file.
             self.setpath(fid, _pathcat(self.getpath(startdir), components[0]))
             qid = resp.wqid[0]
             return self._uxopen2(needtype, fid, qid, omode_byte, False)
 
-        # Walk failed.  If we allocated a fid, retire it.  Then dup
-        # startdir if we're creating a file, since the create will
-        # overwrite the fid.
+        # Walk failed.  If we allocated a fid, retire it.  Then set
+        # up a fid that points to the parent directory in which to
+        # create the file or directory.  Note that if we're creating
+        # a file, this fid will get changed so that it points to the
+        # file instead of the directory, but if we're creating a
+        # directory, it will be unchanged.
         if fid != startdir:
             self.retire_fid(fid)
-        if filetype == 'dir':
-            fid = None
-        else:
-            fid = self.dupfid(startdir)
+        fid = self.dupfid(startdir)
 
+        try:
+            qid, iounit = self._uxcreate(filetype, fid, components[0],
+                                         oflags, omode_byte, perm, gid)
+
+            # Success.  If we created an ordinary file, we have everything
+            # now as create alters the incoming (dir) fid to open the file.
+            # Otherwise (mkdir), we need to open the file, as with
+            # a successful lookup.
+            #
+            # Note that qid type should match "needtype".
+            if filetype != 'dir':
+                if qid.type == needtype:
+                    return fid, qid, iounit, True
+                self.clunk(fid, ignore_error=True)
+                raise OSError(_wrong_file_type(qid),
+                             '{0}: server told to create {1} but '
+                             'created {2} instead'.format(path,
+                                                          qt2n(needtype),
+                                                          qt2n(qid.type)))
+
+            # Success: created dir; but now need to walk to and open it.
+            fid = self.alloc_fid()
+            tag = self.get_tag()
+            pkt = self.proto.Twalk(tag=tag, fid=startdir, newfid=fid,
+                                   nwname=1, wname=components)
+            super(P9Client, self).write(pkt)
+            resp = self.wait_for(tag)
+            if not isinstance(resp, protocol.rrd.Rwalk):
+                self.clunk(fid, ignore_error=True)
+                raise OSError(errno.ENOENT,
+                              '{0}: server made dir but then failed to '
+                              'find it again'.format(path))
+                self.setpath(fid, _pathcat(self.getpath(fid), components[0]))
+            return self._uxopen2(needtype, fid, qid, omode_byte, True)
+        finally:
+            # Regardless of success/failure/exception, make sure
+            # we clunk startdir if needed.
+            if clunk_startdir:
+                self.clunk(startdir, ignore_error=True)
+
+    def _uxcreate(self, filetype, fid, name, oflags, omode_byte, perm, gid):
+        """
+        Helper for creating dir-or-file.  The fid argument is the
+        parent directory on input, but will point to the file (if
+        we're creating a file) on return.  oflags only applies if
+        we're creating a file (even then we use omode_byte if we
+        are using the plan9 create op).
+        """
         # Try to create or mkdir as appropriate.
         if self.supports_all(protocol.td.Tlcreate, protocol.td.Tmkdir):
             # Use Linux style create / mkdir.
             if filetype == 'dir':
                 if perm is None:
                     perm = 0o777
-                qid = self.mkdir(startdir, components[0], perm, gid)
-                iounit = None
+                return self.mkdir(startdir, name, perm, gid), None
+            if perm is None:
+                perm = 0o666
+            lflags = flags_to_linux_flags(oflags)
+            return self.lcreate(fid, name, lflags, perm, gid)
+
+        if filetype == 'dir':
+            if perm is None:
+                perm = protocol.td.DMDIR | 0o777
             else:
-                if perm is None:
-                    perm = 0o666
-                lflags = flags_to_linux_flags(oflags)
-                qid, iounit = self.lcreate(fid, components[0],
-                                           lflags, perm, gid)
+                perm |= protocol.td.DMDIR
         else:
             if perm is None:
-                perm = protocol.td.DMDIR | 0o777 if filetype == 'dir' else 0o666
-            qid, iounit = self.create(fid, components[0], perm, omode_byte)
-
-        # Success.  If we created an ordinary file, we have everything
-        # now as create alters the incoming (dir) fid to open the file.
-        # Otherwise (mkdir), we need to open the file, as with
-        # a successful lookup.
-        #
-        # Note that qid type should match "needtype".
-        if filetype != 'dir':
-            if qid.type == needtype:
-                return fid, qid, iounit, True
-            self.clunk(fid, ignore_error=True)
-            raise OSError(_wrong_file_type(qid),
-                         '{0}: server told to create {1} but '
-                         'created {2} instead'.format(path,
-                                                      qt2n(needtype),
-                                                      qt2n(qid.type)))
-
-        # Success: created dir; but now need to walk to and open it.
-        fid = self.alloc_fid()
-        tag = self.get_tag()
-        pkt = self.proto.Twalk(tag=tag, fid=startdir, newfid=fid,
-                               nwname=1, wname=components)
-        super(P9Client, self).write(pkt)
-        resp = self.wait_for(tag)
-        if not isinstance(resp, protocol.rrd.Rwalk):
-            self.clunk(fid, ignore_error=True)
-            raise OSError('{0}: server made dir but then failed to '
-                          'find it again'.format(path))
-            self.setpath(fid, _pathcat(self.getpath(fid), components[0]))
-        return self._uxopen2(needtype, fid, qid, omode_byte, True)
+                perm = 0o666
+        return self.create(fid, name, perm, omode_byte)
 
     def _uxopen2(self, needtype, fid, qid, omode_byte, didcreate):
         "common code for finishing up uxopen"
@@ -1523,19 +1554,22 @@ class P9Client(P9SockIO):
         """
         components, startdir = self._pathsplit(path, startdir, allow_empty=True)
         fid, qid = self.lookup_last(startdir, components)
-        if qid.type != protocol.td.QTDIR:
-            raise OSError(errno.ENOTDIR,
-                          '{0}: {1}'.format(self.getpathX(fid),
-                                            os.strerror(errno.ENOTDIR)))
-        # We need both Tlopen and Treaddir to use Treaddir.
-        if not self.supports_all(protocol.td.Tlopen, protocol.td.Treaddir):
-            no_dotl = True
-        if no_dotl:
-            statvals = self.uxreaddir_stat_fid(fid)
-            return [i.name for i in statvals]
+        try:
+            if qid.type != protocol.td.QTDIR:
+                raise OSError(errno.ENOTDIR,
+                              '{0}: {1}'.format(self.getpathX(fid),
+                                                os.strerror(errno.ENOTDIR)))
+            # We need both Tlopen and Treaddir to use Treaddir.
+            if not self.supports_all(protocol.td.Tlopen, protocol.td.Treaddir):
+                no_dotl = True
+            if no_dotl:
+                statvals = self.uxreaddir_stat_fid(fid)
+                return [i.name for i in statvals]
 
-        dirents = self.uxreaddir_dotl_fid(fid)
-        return [dirent.name for dirent in dirents]
+            dirents = self.uxreaddir_dotl_fid(fid)
+            return [dirent.name for dirent in dirents]
+        finally:
+            self.clunk(fid, ignore_error=True)
 
     def uxreaddir_stat(self, path, startdir=None):
         """
@@ -1543,7 +1577,8 @@ class P9Client(P9SockIO):
 
         Note that this gets a fid, then opens it, reads, then clunks
         the fid.  If you already have a fid, you may want to use
-        uxreaddir_stat_fid (and you may need to dupfid it).
+        uxreaddir_stat_fid (but note that this opens, yet does not
+        clunk, the fid).
 
         We return the qid plus the list of the contents.  If the
         target is not a directory, the qid will not have type QTDIR
@@ -1553,69 +1588,64 @@ class P9Client(P9SockIO):
         """
         components, startdir = self._pathsplit(path, startdir)
         fid, qid = self.lookup_last(startdir, components)
-        if qid.type != protocol.td.QTDIR:
-            raise OSError(errno.ENOTDIR,
-                          '{0}: {1}'.format(self.getpathX(fid),
-                                            os.strerror(errno.ENOTDIR)))
-        statvals = self.ux_readdir_stat_fid(fid)
-        return qid, statvals
+        try:
+            if qid.type != protocol.td.QTDIR:
+                raise OSError(errno.ENOTDIR,
+                              '{0}: {1}'.format(self.getpathX(fid),
+                                                os.strerror(errno.ENOTDIR)))
+            statvals = self.ux_readdir_stat_fid(fid)
+            return qid, statvals
+        finally:
+            self.clunk(fid, ignore_error=True)
 
     def uxreaddir_stat_fid(self, fid):
         """
         Implement readdir loop that extracts stat values.
-        Clunks the fid when done (since we always open it).
-        Clunks the fid even if it's not a directory or open fails.
+        This opens, but does not clunk, the given fid.
 
         Unlike uxreaddir_stat(), if this is applied to a file,
         rather than a directory, it just returns no entries.
         """
         statvals = []
-        try:
-            qid, iounit = self.open(fid, protocol.td.OREAD)
-            # ?? is a zero iounit allowed? if so, what do we use here?
-            if qid.type == protocol.td.QTDIR:
-                if iounit <= 0:
-                    iounit = 512 # probably good enough
-                offset = 0
-                while True:
-                    bstring = self.read(fid, offset, iounit)
-                    if bstring == b'':
-                        break
-                    statvals.extend(self.decode_stat_objects(bstring))
-                    offset += len(bstring)
-        finally:
-            self.clunk(fid, ignore_error=True)
+        qid, iounit = self.open(fid, protocol.td.OREAD)
+        # ?? is a zero iounit allowed? if so, what do we use here?
+        if qid.type == protocol.td.QTDIR:
+            if iounit <= 0:
+                iounit = 512 # probably good enough
+            offset = 0
+            while True:
+                bstring = self.read(fid, offset, iounit)
+                if bstring == b'':
+                    break
+                statvals.extend(self.decode_stat_objects(bstring))
+                offset += len(bstring)
         return statvals
 
     def uxreaddir_dotl_fid(self, fid):
         """
         Implement readdir loop that uses dot-L style dirents.
-        Clunks the fid when done (since we always open it).
-        Clunks the fid even if it's not a directory or lopen fails.
+        This opens, but does not clunk, the given fid.
 
         If applied to a file, the lopen should fail, because of the
         L_O_DIRECTORY flag.
         """
         dirents = []
-        try:
-            qid, iounit = self.lopen(fid, protocol.td.OREAD |
-                                          protocol.td.L_O_DIRECTORY)
-            # ?? is a zero iounit allowed? if so, what do we use here?
-            # but, we want a minimum of over 256 anyway, let's go for 512
-            if iounit < 512:
-                iounit = 512
-            offset = 0
-            while True:
-                bstring = self.readdir(fid, offset, iounit)
-                if bstring == b'':
-                    break
-                ents = self.decode_readdir_dirents(bstring)
-                if len(ents) == 0:
-                    break               # ???
-                dirents.extend(ents)
-                offset = ents[-1].offset
-        finally:
-            self.clunk(fid, ignore_error=True)
+        qid, iounit = self.lopen(fid, protocol.td.OREAD |
+                                      protocol.td.L_O_DIRECTORY)
+        # ?? is a zero iounit allowed? if so, what do we use here?
+        # but, we want a minimum of over 256 anyway, let's go for 512
+        if iounit < 512:
+            iounit = 512
+        offset = 0
+        while True:
+            bstring = self.readdir(fid, offset, iounit)
+            if bstring == b'':
+                break
+            ents = self.decode_readdir_dirents(bstring)
+            if len(ents) == 0:
+                break               # ???
+            dirents.extend(ents)
+            offset = ents[-1].offset
         return dirents
 
     def uxremove(self, path, startdir=None, filetype=None,
@@ -1641,22 +1671,21 @@ class P9Client(P9SockIO):
             # it's a directory, remove only if allowed.
             # Note that we must check for "rm -r /" (len(components)==0).
             if filetype == 'file':
+                self.clunk(fid, ignore_error=True)
                 raise OSError(_wrong_file_type(qid),
                               '{0}: is dir, expected file'.format(path))
             isroot = len(components) == 0
             closer = self.clunk if isroot else self.remove
             if recurse:
-                try:
-                    self._rm_recursive(fid, filetype, force, closer)
-                except OSError:
-                    closer(fid, ignore_error=force)
-                return
+                # NB: _rm_recursive does not clunk fid
+                self._rm_recursive(fid, filetype, force)
             # This will fail if the directory is non-empty, unless of
             # course we tell it to ignore error.
             closer(fid, ignore_error=force)
             return
         # Not a directory, call it a file (even if socket or fifo etc).
         if filetype == 'dir':
+            self.clunk(fid, ignore_error=True)
             raise OSError(_wrong_file_type(qid),
                           '{0}: is file, expected dir'.format(path))
         self.remove(fid, ignore_error=force)
@@ -1691,7 +1720,7 @@ class P9Client(P9SockIO):
             return
         self.remove(fid, ignore_error=force)
 
-    def _rm_recursive(self, dfid, filetype, force, closer):
+    def _rm_recursive(self, dfid, filetype, force):
         """
         Recursively remove a directory.  filetype is probably None,
         but if it's 'dir' we fail if the directory contains non-dir
@@ -1699,24 +1728,27 @@ class P9Client(P9SockIO):
 
         If force is set, ignore failures.
 
-        Use closer() (which is self.clunk or self.remove as
-        appropriate) to close off the fid once we're done with it.
-        This lets us avoid attempting self.remove() on a fid that
-        is the root of the tree.
+        Although we open dfid (via the readdir.*_fid calls) we
+        do not clunk it here; that's the caller's job.
         """
         # first, remove contents
         if self.supports_all(protocol.td.Tlopen, protocol.td.Treaddir):
-            for entry in self.uxreaddir_dotl_fid(self.dupfid(dfid)):
+            for entry in self.uxreaddir_dotl_fid(dfid):
                 if entry.name in (b'.', b'..'):
                     continue
                 fid, qid = self.lookup(dfid, [entry.name])
-                attrs = self.Tgetattr(fid, protocol.td.GETATTR_MODE)
-                if stat.S_ISDIR(attrs.mode):
-                    self.uxremove(entry.name, dfid, filetype, force, True)
-                else:
-                    self._rm_file_by_dfid(dfid, entry.name, force)
+                try:
+                    attrs = self.Tgetattr(fid, protocol.td.GETATTR_MODE)
+                    if stat.S_ISDIR(attrs.mode):
+                        self.uxremove(entry.name, dfid, filetype, force, True)
+                    else:
+                        self.remove(fid)
+                        fid = None
+                finally:
+                    if fid is not None:
+                        self.clunk(fid, ignore_error=True)
         else:
-            for statobj in self.uxreaddir_stat_fid(self.dupfid(dfid)):
+            for statobj in self.uxreaddir_stat_fid(dfid):
                 # skip . and ..
                 name = statobj.name
                 if name in (b'.', b'..'):
@@ -1725,8 +1757,6 @@ class P9Client(P9SockIO):
                     self.uxremove(name, dfid, filetype, force, True)
                 else:
                     self._rm_file_by_dfid(dfid, name, force)
-        # Finally, close (clunk or remove) the directory.
-        closer(dfid, ignore_error=force)
 
 def _wrong_file_type(qid):
     "return EISDIR or ENOTDIR for passing to OSError"

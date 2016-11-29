@@ -623,7 +623,7 @@ def more_test_cases(tstate):
         clnt = tc.ccs()
         if not clnt.supports(protocol.td.Txattrwalk):
             tc.skip('{0} does not support Txattrwalk'.format(clnt))
-        dirfid, _ = clnt.uxlookup(b'/dir')
+        dirfid, _ = clnt.uxlookup(b'/')
         tc.autoclunk(dirfid)
         try:
             # need better tests...
@@ -633,8 +633,22 @@ def more_test_cases(tstate):
             tc.trace('xattrwalk with no name: data=%r', data)
             tc.succ('xattrwalk size={0} datalen={1}'.format(size, len(data)))
         except RemoteError as err:
+            if err.is_ENOTSUP():
+                clnt.unsupported(protocol.td.Txattrwalk)
             tc.trace('xattrwalk on /dir: {0}'.format(err))
         tc.succ('xattrwalk apparently not implemented')
+    # now let's see if we can read "system.posix_acl_access" by name
+    with TestCase('xattrwalk system.posix_acl_access', tstate) as tc:
+        clnt = tc.ccs()
+        if not clnt.supports(protocol.td.Txattrwalk):
+            tc.skip('{0} does not support Txattrwalk'.format(clnt))
+        dirfid, _ = clnt.uxlookup(b'/')
+        tc.autoclunk(dirfid)
+        attrfid, size = clnt.xattrwalk(dirfid, 'system.posix_acl_access')
+        tc.autoclunk(attrfid)
+        data = clnt.read(attrfid, 0, size)
+        tc.trace('xattrwalk system.posix_acl_access: data=%r', data)
+        tc.succ('xattrwalk system.posix_acl_access: size={0} datalen={1}'.format(size, len(data)))
 
 if __name__ == '__main__':
     try:

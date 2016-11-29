@@ -1093,6 +1093,35 @@ class P9Client(P9SockIO):
                          resp)
         return resp.data
 
+    def rename(self, fid, dfid, name):
+        "invoke Trename: rename file <fid> to <dfid>/name"
+        tag = self.get_tag()
+        pkt = self.proto.Trename(tag=tag, fid=fid, dfid=dfid, name=name)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rrename):
+            self.badresp('rename {0} to {2} in '
+                         '{1}'.format(self.getpathX(fid),
+                                      self.getpathX(dfid), name),
+                         resp)
+        self.did_rename(fid, name, self.getpath(dfid))
+
+    def renameat(self, olddirfid, oldname, newdirfid, newname):
+        "invoke Trenameat: rename <olddirfid>/oldname to <newdirfid>/newname"
+        tag = self.get_tag()
+        pkt = self.proto.Trenameat(tag=tag,
+                                   olddirfid=olddirfid, oldname=oldname,
+                                   newdirfid=newdirfid, newname=newname)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rrenameat):
+            self.badresp('rename {1} in {0} to {3} in '
+                         '{2}'.format(oldname, self.getpathX(olddirfid),
+                                      newname, self.getpathX(newdirdfid)),
+                         resp)
+        # There's no renamed *fid*, just a renamed file!  So no
+        # call to self.did_rename().
+
     def unlinkat(self, dirfd, name, flags):
         "invoke Tunlinkat - flags should be 0 or protocol.td.AT_REMOVEDIR"
         tag = self.get_tag()
@@ -1132,6 +1161,21 @@ class P9Client(P9SockIO):
             obj, offset = self.proto.unpack_dirent(bstring, offset, noerror)
             objlist.append(obj)
         return objlist
+
+    def lcreate(self, fid, name, lflags, mode, gid):
+        "issue lcreate (.L)"
+        tag = self.get_tag()
+        pkt = self.proto.Tlcreate(tag=tag, fid=fid, name=name,
+                                  flags=lflags, mode=mode, gid=gid)
+        super(P9Client, self).write(pkt)
+        resp = self.wait_for(tag)
+        if not isinstance(resp, protocol.rrd.Rlcreate):
+            self.badresp('create {0} in '
+                         '{1}'.format(name, self.getpathX(fid)), resp)
+        # Creating a file opens the file,
+        # thus changing the fid's path.
+        self.setpath(fid, _pathcat(self.getpath(fid), name))
+        return resp.qid, resp.iounit
 
     def mkdir(self, dfid, name, mode, gid):
         "issue mkdir (.L)"

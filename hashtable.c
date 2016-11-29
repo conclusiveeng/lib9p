@@ -60,6 +60,9 @@ ht_destroy(struct ht *h)
 		he = &h->ht_entries[i];
 		hi = TAILQ_FIRST(&he->hte_items);
 
+		if (hi == NULL)
+			continue;
+
 		while ((hi = TAILQ_NEXT(hi, hti_link)) != NULL)
 			TAILQ_REMOVE(&he->hte_items, hi, hti_link);
 	}
@@ -176,6 +179,11 @@ ht_next(struct ht_iter *iter)
 	pthread_rwlock_rdlock(&iter->htit_parent->ht_rwlock);
 
 retry:
+	if (iter->htit_slot == iter->htit_parent->ht_nentries) {
+		pthread_rwlock_unlock(&iter->htit_parent->ht_rwlock);
+		return (NULL);
+	}
+
 	item = iter->htit_cursor;
 	if (item == NULL) {
 		iter->htit_slot++;
@@ -184,11 +192,6 @@ retry:
 
 	if ((iter->htit_cursor = TAILQ_NEXT(iter->htit_cursor, hti_link)) == NULL)
 	{
-		if (iter->htit_slot == iter->htit_parent->ht_nentries) {
-			pthread_rwlock_unlock(&iter->htit_parent->ht_rwlock);
-			return (NULL);
-		}
-
 		iter->htit_slot++;
 		goto retry;
 

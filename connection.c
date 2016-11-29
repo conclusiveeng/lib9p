@@ -60,10 +60,15 @@ l9p_connection_init(struct l9p_server *server, struct l9p_connection **conn)
 	assert(server != NULL);
 	assert(conn != NULL);
 
-	newconn = l9p_calloc(1, sizeof (*newconn));
+	newconn = calloc(1, sizeof (*newconn));
+	if (newconn == NULL)
+		return (-1);
 	newconn->lc_server = server;
 	newconn->lc_msize = L9P_DEFAULT_MSIZE;
-	l9p_threadpool_init(&newconn->lc_tp, L9P_NUMTHREADS);
+	if (l9p_threadpool_init(&newconn->lc_tp, L9P_NUMTHREADS)) {
+		free(newconn);
+		return (-1);
+	}
 	ht_init(&newconn->lc_files, 100);
 	ht_init(&newconn->lc_requests, 100);
 	LIST_INSERT_HEAD(&server->ls_conns, newconn, lc_link);

@@ -25,6 +25,7 @@
  *
  */
 
+#include <errno.h>
 #include <stdlib.h>
 #include <pthread.h>
 #if defined(__FreeBSD__)
@@ -69,18 +70,31 @@ l9p_threadpool_init(struct l9p_threadpool *tp, int size)
 #if defined(__FreeBSD__)
 	char threadname[16];
 #endif
+	int error;
 	int i;
 
-	pthread_mutex_init(&tp->ltp_mtx, NULL);
-	pthread_cond_init(&tp->ltp_cv, NULL);
+	if (size <= 0)
+		return (EINVAL);
+	error = pthread_mutex_init(&tp->ltp_mtx, NULL);
+	if (error)
+		return (error);
+	error = pthread_cond_init(&tp->ltp_cv, NULL);
+	if (error) {
+		pthread_mutex_destroy(&tp->ltp_mtx);
+		return (error);
+	}
 	STAILQ_INIT(&tp->ltp_queue);
 	LIST_INIT(&tp->ltp_workers);
 
 	for (i = 0; i < size; i++) {
 		worker = calloc(1, sizeof(struct l9p_worker));
 		worker->ltw_tp = tp;
-		pthread_create(&worker->ltw_thread, NULL, &l9p_worker,
+		error = pthread_create(&worker->ltw_thread, NULL, &l9p_worker,
 		    (void *)worker);
+		if (error) {
+			free(worker);
+			break;
+		}
 
 #if defined(__FreeBSD__)
 		sprintf(threadname, "9p-worker:%d", i);
@@ -89,8 +103,11 @@ l9p_threadpool_init(struct l9p_threadpool *tp, int size)
 
 		LIST_INSERT_HEAD(&tp->ltp_workers, worker, ltw_link);
 	}
+	/* if we made any workers, that's sufficient */
+	if (i > 0)
+		error = 0;
 
-	return (0);
+	return (error);
 }
 
 int
@@ -119,6 +136,8 @@ l9p_threadpool_shutdown(struct l9p_threadpool *tp)
 		LIST_REMOVE(worker, ltw_link);
 		free(worker);
 	}
+	pthread_cond_destroy(&tp->ltp_cv);
+	pthread_mutex_destroy(&tp->ltp_mtx);
 
 	return (0);
 }

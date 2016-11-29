@@ -548,12 +548,18 @@ static struct fs_fid *
 open_fid(const char *path, struct fs_authinfo *ai)
 {
 	struct fs_fid *ret;
+	int error;
 
 	ret = l9p_calloc(1, sizeof(*ret));
-	pthread_mutex_init(&ret->ff_mtx, NULL);
+	error = pthread_mutex_init(&ret->ff_mtx, NULL);
+	if (error) {
+		free(ret);
+		return (NULL);
+	}
 	ret->ff_fd = -1;
 	ret->ff_name = strdup(path);
 	if (ret->ff_name == NULL) {
+		pthread_mutex_destroy(&ret->ff_mtx);
 		free(ret);
 		return (NULL);
 	}

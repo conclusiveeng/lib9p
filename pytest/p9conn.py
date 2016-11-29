@@ -79,7 +79,7 @@ class RemoteError(P9Error):
 
     def is_ENOTSUP(self):
         if self.etype == 'Rlerror':
-            return self.errno == lerrno.ENOTSUP
+            return self.errno == lerrno.EOPNOTSUPP
         return self.errno == errno.EOPNOTSUPP
 
     def _get_message(self):

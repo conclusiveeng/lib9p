@@ -1687,3 +1687,26 @@ def _wrong_file_type(qid):
     if qid.type == protocol.td.QTDIR:
         return errno.EISDIR
     return errno.ENOTDIR
+
+def flags_to_linux_flags(flags):
+    """
+    Convert OS flags (O_CREAT etc) to Linux flags (protocol.td.L_O_CREAT etc).
+    """
+    flagmap = {
+        os.O_CREAT: protocol.td.L_O_CREAT,
+        os.O_EXCL: protocol.td.L_O_EXCL,
+        os.O_NOCTTY: protocol.td.L_O_NOCTTY,
+        os.O_TRUNC: protocol.td.L_O_TRUNC,
+        os.O_APPEND: protocol.td.L_O_APPEND,
+        os.O_DIRECTORY: protocol.td.L_O_DIRECTORY,
+    }
+
+    result = flags & os.O_RDWR
+    flags &= ~os.O_RDWR
+    for key, value in flagmap.iteritems():
+        if flags & key:
+            result |= value
+            flags &= ~key
+    if flags:
+        raise ValueError('untranslated bits 0x{0:x} in os flags'.format(flags))
+    return result

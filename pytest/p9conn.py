@@ -887,7 +887,8 @@ class P9Client(P9SockIO):
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Rstat):
             self.badresp('stat {0}'.format(self.getpathX(fid)), resp)
-        return rfid, stat.qid
+        statval = self.proto.unpack_wirestat(resp.data)
+        return rfid, statval.qid
 
     def clunk(self, fid, ignore_error=False):
         "issue clunk(fid)"
@@ -1101,7 +1102,7 @@ class P9Client(P9SockIO):
         resp = self.wait_for(tag)
         if not isinstance(resp, protocol.rrd.Runlinkat):
             self.badresp('unlinkat {0} in '
-                         '{1}'.format(name, self.getpathX(fid)), resp)
+                         '{1}'.format(name, self.getpathX(dirfd)), resp)
 
     def decode_stat_objects(self, bstring, noerror=False):
         """

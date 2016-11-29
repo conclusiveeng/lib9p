@@ -152,7 +152,6 @@ struct l9p_connection {
 	void *lc_send_response_aux;
 	struct ht lc_files;
 	struct ht lc_requests;
-	pthread_mutex_t lc_mtx;
 	LIST_ENTRY(l9p_connection) lc_link;
 };
 

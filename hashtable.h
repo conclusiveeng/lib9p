@@ -42,15 +42,16 @@ struct ht_entry {
 };
 
 struct ht_item {
-	uint32_t hti_hash;
-	void * hti_data;
-	TAILQ_ENTRY(ht_item) hti_link;
+	uint32_t		hti_hash;
+	void *			hti_data;
+	TAILQ_ENTRY(ht_item)	hti_link;
 };
 
 struct ht_iter {
-	struct ht * htit_parent;
-	struct ht_item * htit_cursor;
-	size_t htit_slot;
+	struct ht *		htit_parent;
+	struct ht_item *	htit_curr;
+	struct ht_item *	htit_next;
+	size_t			htit_slot;
 };
 
 void ht_init(struct ht *h, size_t size);

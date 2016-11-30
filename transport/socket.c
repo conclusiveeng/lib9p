@@ -199,6 +199,7 @@ l9p_socket_thread(void *arg)
 
 	L9P_LOG(L9P_INFO, "connection closed");
 	l9p_connection_close(sc->ls_conn);
+	free(sc);
 	return (NULL);
 }
 

@@ -130,6 +130,16 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
 }
 
 void
+l9p_connection_reqfree(struct l9p_request *req)
+{
+	struct l9p_connection *conn;
+
+	conn = req->lr_conn;
+	ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
+	free(req);
+}
+
+void
 l9p_connection_close(struct l9p_connection *conn)
 {
 	struct ht_iter iter;
@@ -142,7 +152,7 @@ l9p_connection_close(struct l9p_connection *conn)
 	/* Drain pending requests (if any) */
 	L9P_LOG(L9P_DEBUG, "draining pending requests");
 	ht_iter(&conn->lc_requests, &iter);
-	while ((req =  ht_next(&iter)) != NULL) {
+	while ((req = ht_next(&iter)) != NULL) {
 		l9p_respond(req, EINTR);
 		ht_remove_at_iter(&iter);
 	}
@@ -153,6 +163,7 @@ l9p_connection_close(struct l9p_connection *conn)
 	while ((fid = ht_next(&iter)) != NULL) {
 		conn->lc_server->ls_backend->freefid(
 		    conn->lc_server->ls_backend->softc, fid);
+		free(fid);
 		ht_remove_at_iter(&iter);
 	}
 

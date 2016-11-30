@@ -69,7 +69,6 @@ ht_destroy(struct ht *h)
 
 	pthread_rwlock_destroy(&h->ht_rwlock);
 	free(h->ht_entries);
-	free(h);
 }
 
 void *

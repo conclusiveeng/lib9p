@@ -132,7 +132,6 @@ ht_remove(struct ht *h, uint32_t hash)
 	TAILQ_FOREACH_SAFE(item, &entry->hte_items, hti_link, tmp) {
 		if (item->hti_hash == hash) {
 			TAILQ_REMOVE(&entry->hte_items, item, hti_link);
-			free(item->hti_data);
 			free(item);
 			pthread_rwlock_unlock(&h->ht_rwlock);
 			return (0);
@@ -157,6 +156,7 @@ ht_remove_at_iter(struct ht_iter *iter)
 	pthread_rwlock_wrlock(&iter->htit_parent->ht_rwlock);
 	TAILQ_REMOVE(&iter->htit_parent->ht_entries[iter->htit_slot].hte_items,
 	    iter->htit_cursor, hti_link);
+	free(iter->htit_cursor);
 	pthread_rwlock_unlock(&iter->htit_parent->ht_rwlock);
 	return (0);
 }

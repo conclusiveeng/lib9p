@@ -117,6 +117,7 @@ l9p_threadpool_shutdown(struct l9p_threadpool *tp)
 		pthread_mutex_unlock(&tp->ltp_mtx);
 		pthread_join(worker->ltw_thread, NULL);
 		LIST_REMOVE(worker, ltw_link);
+		free(worker);
 	}
 
 	return (0);

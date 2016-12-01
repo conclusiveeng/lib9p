@@ -107,7 +107,6 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
 	req = l9p_calloc(1, sizeof (struct l9p_request));
 	req->lr_aux = aux;
 	req->lr_conn = conn;
-	ht_add(&conn->lc_requests, req->lr_req.hdr.tag, req);
 
 	req->lr_req_msg.lm_mode = L9P_UNPACK;
 	req->lr_req_msg.lm_niov = niov;
@@ -117,18 +116,34 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
 
 	if (l9p_pufcall(&req->lr_req_msg, &req->lr_req, conn->lc_version) != 0) {
 		L9P_LOG(L9P_WARNING, "cannot unpack received message");
+		l9p_freefcall(&req->lr_req);
+		free(req);
+		return;
+	}
+
+	if (ht_add(&conn->lc_requests, req->lr_req.hdr.tag, req)) {
+		L9P_LOG(L9P_WARNING, "client reusing outstanding tag %d",
+		    req->lr_req.hdr.tag);
+		l9p_freefcall(&req->lr_req);
+		free(req);
 		return;
 	}
 
 	if (conn->lc_get_response_buffer(req, req->lr_resp_msg.lm_iov,
 	    &req->lr_resp_msg.lm_niov, conn->lc_get_response_buffer_aux) != 0) {
 		L9P_LOG(L9P_WARNING, "cannot obtain buffers for response");
+		l9p_freefcall(&req->lr_req);
+		l9p_connection_reqfree(req);
 		return;
 	}
 
 	l9p_threadpool_enqueue(&conn->lc_tp, req);
 }
 
+/*
+ * Normal path indicating done-with-request.  We release the tag
+ * for re-use here as well as freeing the request.
+ */
 void
 l9p_connection_reqfree(struct l9p_request *req)
 {
@@ -153,7 +168,9 @@ l9p_connection_close(struct l9p_connection *conn)
 	L9P_LOG(L9P_DEBUG, "draining pending requests");
 	ht_iter(&conn->lc_requests, &iter);
 	while ((req = ht_next(&iter)) != NULL) {
+		/* XXX need to know if there is anyone listening */
 		l9p_respond(req, EINTR);
+		free(req);
 		ht_remove_at_iter(&iter);
 	}
 

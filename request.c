@@ -192,15 +192,17 @@ l9p_dispatch_request(struct l9p_request *req)
 	for (i = 0; i < n; i++) {
 		if (req->lr_req.hdr.type == handlers[i].type) {
 			error = handlers[i].handler(req);
-			if (error != EJUSTRETURN)
-				l9p_respond(req, error);
-
-			return;
+			if (error == EJUSTRETURN)
+				return;
+			goto done;
 		}
 	}
 
 	L9P_LOG(L9P_WARNING, "unknown request of type %d", req->lr_req.hdr.type);
-	l9p_respond(req, ENOSYS);
+	error = ENOSYS;
+done:
+	l9p_respond(req, error);
+	l9p_connection_reqfree(req);
 }
 
 /*
@@ -366,7 +368,6 @@ l9p_respond(struct l9p_request *req, int errnum)
 out:
 	l9p_freefcall(&req->lr_req);
 	l9p_freefcall(&req->lr_resp);
-	l9p_connection_reqfree(req);
 }
 
 /*

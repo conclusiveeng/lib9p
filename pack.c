@@ -424,7 +424,8 @@ l9p_pudirent(struct l9p_message *msg, struct l9p_dirent *de)
 /*
  * Pack or unpack a request or response (fcall).
  *
- * Returns 0 on success, -1 on error.
+ * Returns 0 on success, -1 on error.  (It's up to the caller
+ * to call l9p_freefcall on our failure.)
  */
 int
 l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
@@ -836,11 +837,8 @@ l9p_pufcall(struct l9p_message *msg, union l9p_fcall *fcall,
 	}
 
 	/* Check for over- or under-run, or pustring error. */
-	if (r < 0) {
-		if (msg->lm_mode == L9P_UNPACK)
-			l9p_freefcall(fcall);
+	if (r < 0)
 		return (-1);
-	}
 
 	if (msg->lm_mode == L9P_PACK) {
 		/* Rewind to the beginning and install size at front. */

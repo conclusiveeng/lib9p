@@ -194,4 +194,5 @@ l9p_connection_remove_fid(struct l9p_connection *conn, struct l9p_fid *fid)
 	be->freefid(be->softc, fid);
 
 	ht_remove(&conn->lc_files, fid->lo_fid);
+	free(fid);
 }

@@ -137,6 +137,7 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
 	if (conn->lc_get_response_buffer(req, req->lr_resp_msg.lm_iov,
 	    &req->lr_resp_msg.lm_niov, conn->lc_get_response_buffer_aux) != 0) {
 		L9P_LOG(L9P_WARNING, "cannot obtain buffers for response");
+		ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
 		l9p_freefcall(&req->lr_req);
 		free(req);
 		return;

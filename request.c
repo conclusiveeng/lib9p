@@ -166,7 +166,11 @@ static const struct {
 	{ "9P2000.L", l9p_handlers_dotL, N(l9p_handlers_dotL), },
 };
 
-void
+/*
+ * Run the appropriate handler for this request.
+ * It's our caller's responsibility to respond.
+ */
+int
 l9p_dispatch_request(struct l9p_request *req)
 {
 	struct l9p_connection *conn;
@@ -175,7 +179,6 @@ l9p_dispatch_request(struct l9p_request *req)
 #endif
 	size_t i, n;
 	const struct l9p_handler *handlers;
-	int error;
 
 	conn = req->lr_conn;
 #if defined(L9P_DEBUG)
@@ -189,23 +192,13 @@ l9p_dispatch_request(struct l9p_request *req)
 
 	handlers = l9p_versions[conn->lc_version].handlers;
 	n = (size_t)l9p_versions[conn->lc_version].n_handlers;
-	for (i = 0; i < n; i++) {
-		if (req->lr_req.hdr.type == handlers[i].type) {
-			error = handlers[i].handler(req);
-			goto done;
-		}
-	}
+	for (i = 0; i < n; i++)
+		if (req->lr_req.hdr.type == handlers[i].type)
+			return (handlers[i].handler(req));
 
-	L9P_LOG(L9P_WARNING, "unknown request of type %d", req->lr_req.hdr.type);
-	error = ENOSYS;
-done:
-	/*
-	 * Remove tag from hash table before responding to avoid possible race
-	 * when client immediately wants to reuse tag
-	 */
-	ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
-	l9p_respond(req, error);
-	free(req);
+	L9P_LOG(L9P_WARNING, "unknown request of type %d",
+	    req->lr_req.hdr.type);
+	return (ENOSYS);
 }
 
 /*

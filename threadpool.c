@@ -38,9 +38,11 @@
 static void *
 l9p_worker(void *arg)
 {
+	struct l9p_connection *conn;
 	struct l9p_threadpool *tp;
 	struct l9p_worker *worker = arg;
 	struct l9p_request *req;
+	int error;
 
 	tp = worker->ltw_tp;
 	for (;;) {
@@ -56,7 +58,17 @@ l9p_worker(void *arg)
 		STAILQ_REMOVE_HEAD(&tp->ltp_queue, lr_link);
 
 		pthread_mutex_unlock(&tp->ltp_mtx);
-		l9p_dispatch_request(req);
+		error = l9p_dispatch_request(req);
+
+		/*
+		 * Remove tag from hash table before responding to
+		 * avoid possible race when client immediately wants
+		 * to reuse tag.
+		 */
+		conn = req->lr_conn;
+		ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
+		l9p_respond(req, error);
+		free(req);
 	}
 
 	pthread_mutex_unlock(&tp->ltp_mtx);

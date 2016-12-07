@@ -52,11 +52,36 @@
 
 struct l9p_request;
 
-typedef int (l9p_get_response_buffer_t) (struct l9p_request *,
-    struct iovec *, size_t *, void *);
-
-typedef int (l9p_send_response_t) (struct l9p_request *, const struct iovec *,
-    const size_t, const size_t, void *);
+/*
+ * Functions to implement underlying transport for lib9p.
+ *
+ * The transport is responsible for:
+ *
+ *   - allocating a response buffer (filling in the iovec and niov)
+ *     (gets req, pointer to base of iov array of size L9P_MAX_IOV,
+ *      pointer to niov, lt_aux)
+ *
+ *   - sending a response, when a request has a reply ready
+ *     (gets req, pointer to iov, niov, actual response length, lt_aux)
+ *
+ *   - dropping the response buffer, when a request has been
+ *     flushed or otherwise dropped without a response
+ *     (gets req, pointer to iov, niov, lt_aux)
+ *
+ * The transport is of course also responsible for feeding in
+ * request-buffers, but that happens by the transport calling
+ * l9p_connection_recv().
+ */
+struct l9p_transport {
+	void	*lt_aux;
+	int	(*lt_get_response_buffer)(struct l9p_request *,
+					  struct iovec *, size_t *, void *);
+	int	(*lt_send_response)(struct l9p_request *,
+				    const struct iovec *, size_t, size_t,
+				    void *);
+	void	(*lt_drop_response)(struct l9p_request *,
+				    const struct iovec *, size_t, void *);
+};
 
 enum l9p_pack_mode {
 	L9P_PACK,
@@ -136,14 +161,11 @@ struct l9p_dirent {
  */
 struct l9p_connection {
 	struct l9p_server *lc_server;
+	struct l9p_transport lc_lt;
 	struct l9p_threadpool lc_tp;
 	enum l9p_version lc_version;
 	uint32_t lc_msize;
 	uint32_t lc_max_io_size;
-	l9p_send_response_t *lc_send_response;
-	l9p_get_response_buffer_t *lc_get_response_buffer;
-	void *lc_get_response_buffer_aux;
-	void *lc_send_response_aux;
 	struct ht lc_files;
 	struct ht lc_requests;
 	LIST_ENTRY(l9p_connection) lc_link;
@@ -170,10 +192,6 @@ int l9p_server_init(struct l9p_server **serverp, struct l9p_backend *backend);
 int l9p_connection_init(struct l9p_server *server,
     struct l9p_connection **connp);
 void l9p_connection_free(struct l9p_connection *conn);
-void l9p_connection_on_send_response(struct l9p_connection *conn,
-    l9p_send_response_t *cb, void *aux);
-void l9p_connection_on_get_response_buffer(struct l9p_connection *conn,
-    l9p_get_response_buffer_t *cb, void *aux);
 void l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
     size_t niov, void *aux);
 void l9p_connection_close(struct l9p_connection *conn);

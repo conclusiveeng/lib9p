@@ -354,20 +354,25 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 
 	if (error != 0) {
 		L9P_LOG(L9P_ERROR, "cannot pack response");
-		goto out;
+		conn->lc_lt.lt_drop_response(req,
+		    req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
+		    conn->lc_lt.lt_aux);
+	} else {
+		iosize = req->lr_resp_msg.lm_size;
+
+		/*
+		 * Include I/O size in calculation for Rread and
+		 * Rreaddir responses.
+		 */
+		if (req->lr_resp.hdr.type == L9P_RREAD ||
+		    req->lr_resp.hdr.type == L9P_RREADDIR)
+			iosize += req->lr_resp.io.count;
+
+		conn->lc_lt.lt_send_response(req,
+		    req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
+		    iosize, conn->lc_lt.lt_aux);
 	}
 
-	iosize = req->lr_resp_msg.lm_size;
-
-	/* Include I/O size in calculation for Rread and Rreaddir responses */
-	if (req->lr_resp.hdr.type == L9P_RREAD ||
-	    req->lr_resp.hdr.type == L9P_RREADDIR)
-		iosize += req->lr_resp.io.count;
-
-	conn->lc_send_response(req, req->lr_resp_msg.lm_iov,
-	    req->lr_resp_msg.lm_niov, iosize, conn->lc_send_response_aux);
-
-out:
 	l9p_freefcall(&req->lr_req);
 	l9p_freefcall(&req->lr_resp);
 

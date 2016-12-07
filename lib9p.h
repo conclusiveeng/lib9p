@@ -49,12 +49,6 @@
 #define L9P_MAX_IOV         8
 #define	L9P_NUMTHREADS      8
 
-/*
- * Pseudo-errno to denote that backend function doesn't return a value,
- * but calls l9p_respond() on it's own instead.
- */
-#define EJUSTRETURN         (ELAST + 1)
-
 struct l9p_request;
 
 typedef int (l9p_get_response_buffer_t) (struct l9p_request *,

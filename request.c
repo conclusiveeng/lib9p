@@ -169,6 +169,7 @@ static const struct {
 void
 l9p_dispatch_request(struct l9p_request *req)
 {
+	struct l9p_connection *conn;
 #if defined(L9P_DEBUG)
 	struct sbuf *sb;
 #endif
@@ -176,22 +177,21 @@ l9p_dispatch_request(struct l9p_request *req)
 	const struct l9p_handler *handlers;
 	int error;
 
+	conn = req->lr_conn;
 #if defined(L9P_DEBUG)
 	sb = sbuf_new_auto();
-	l9p_describe_fcall(&req->lr_req, req->lr_conn->lc_version, sb);
+	l9p_describe_fcall(&req->lr_req, conn->lc_version, sb);
 	sbuf_finish(sb);
 
 	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
 	sbuf_delete(sb);
 #endif
 
-	handlers = l9p_versions[req->lr_conn->lc_version].handlers;
-	n = (size_t)l9p_versions[req->lr_conn->lc_version].n_handlers;
+	handlers = l9p_versions[conn->lc_version].handlers;
+	n = (size_t)l9p_versions[conn->lc_version].n_handlers;
 	for (i = 0; i < n; i++) {
 		if (req->lr_req.hdr.type == handlers[i].type) {
 			error = handlers[i].handler(req);
-			if (error == EJUSTRETURN)
-				return;
 			goto done;
 		}
 	}
@@ -203,7 +203,7 @@ done:
 	 * Remove tag from hash table before responding to avoid possible race
 	 * when client immediately wants to reuse tag
 	 */
-	ht_remove(&req->lr_conn->lc_requests, req->lr_req.hdr.tag);
+	ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
 	l9p_respond(req, error);
 	free(req);
 }

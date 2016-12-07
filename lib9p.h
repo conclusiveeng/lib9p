@@ -189,7 +189,6 @@ void l9p_connection_remove_fid(struct l9p_connection *conn,
 
 void l9p_dispatch_request(struct l9p_request *req);
 void l9p_respond(struct l9p_request *req, int errnum);
-void l9p_connection_reqfree(struct l9p_request *req);
 
 void l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
     enum l9p_pack_mode mode);

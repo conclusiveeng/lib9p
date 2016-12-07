@@ -205,7 +205,7 @@ done:
 	 */
 	ht_remove(&req->lr_conn->lc_requests, req->lr_req.hdr.tag);
 	l9p_respond(req, error);
-	l9p_connection_reqfree(req);
+	free(req);
 }
 
 /*

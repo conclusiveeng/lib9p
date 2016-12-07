@@ -138,24 +138,11 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
 	    &req->lr_resp_msg.lm_niov, conn->lc_get_response_buffer_aux) != 0) {
 		L9P_LOG(L9P_WARNING, "cannot obtain buffers for response");
 		l9p_freefcall(&req->lr_req);
-		l9p_connection_reqfree(req);
+		free(req);
 		return;
 	}
 
 	l9p_threadpool_enqueue(&conn->lc_tp, req);
-}
-
-/*
- * Normal path indicating done-with-request.  We release the tag
- * for re-use here as well as freeing the request.
- */
-void
-l9p_connection_reqfree(struct l9p_request *req)
-{
-	struct l9p_connection *conn;
-
-	conn = req->lr_conn;
-	free(req);
 }
 
 void

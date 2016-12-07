@@ -38,28 +38,28 @@
 static void *
 l9p_worker(void *arg)
 {
-	struct l9p_worker *worker = (struct l9p_worker *)arg;
+	struct l9p_threadpool *tp;
+	struct l9p_worker *worker = arg;
 	struct l9p_request *req;
 
+	tp = worker->ltw_tp;
 	for (;;) {
-		pthread_mutex_lock(&worker->ltw_tp->ltp_mtx);
+		pthread_mutex_lock(&tp->ltp_mtx);
 
-		while (STAILQ_EMPTY(&worker->ltw_tp->ltp_queue)
-		    && !worker->ltw_exiting)
-			pthread_cond_wait(&worker->ltw_tp->ltp_cv,
-			    &worker->ltw_tp->ltp_mtx);
+		while (STAILQ_EMPTY(&tp->ltp_queue) && !worker->ltw_exiting)
+			pthread_cond_wait(&tp->ltp_cv, &tp->ltp_mtx);
 
 		if (worker->ltw_exiting)
 			break;
 
-		req = STAILQ_FIRST(&worker->ltw_tp->ltp_queue);
-		STAILQ_REMOVE_HEAD(&worker->ltw_tp->ltp_queue, lr_link);
+		req = STAILQ_FIRST(&tp->ltp_queue);
+		STAILQ_REMOVE_HEAD(&tp->ltp_queue, lr_link);
 
-		pthread_mutex_unlock(&worker->ltw_tp->ltp_mtx);
+		pthread_mutex_unlock(&tp->ltp_mtx);
 		l9p_dispatch_request(req);
 	}
 
-	pthread_mutex_unlock(&worker->ltw_tp->ltp_mtx);
+	pthread_mutex_unlock(&tp->ltp_mtx);
 	return (NULL);
 }
 
@@ -106,6 +106,10 @@ l9p_threadpool_init(struct l9p_threadpool *tp, int size)
 	/* if we made any workers, that's sufficient */
 	if (i > 0)
 		error = 0;
+	if (error) {
+		pthread_cond_destroy(&tp->ltp_cv);
+		pthread_mutex_destroy(&tp->ltp_mtx);
+	}
 
 	return (error);
 }

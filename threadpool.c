@@ -68,7 +68,6 @@ l9p_worker(void *arg)
 		conn = req->lr_conn;
 		ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
 		l9p_respond(req, error);
-		free(req);
 	}
 
 	pthread_mutex_unlock(&tp->ltp_mtx);

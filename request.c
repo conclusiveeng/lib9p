@@ -364,6 +364,8 @@ l9p_respond(struct l9p_request *req, int errnum)
 out:
 	l9p_freefcall(&req->lr_req);
 	l9p_freefcall(&req->lr_resp);
+
+	free(req);
 }
 
 /*

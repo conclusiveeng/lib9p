@@ -314,13 +314,14 @@ e2linux(int errnum)
 }
 
 void
-l9p_respond(struct l9p_request *req, int errnum)
+l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 {
 	struct l9p_connection *conn = req->lr_conn;
 	size_t iosize;
 #if defined(L9P_DEBUG)
 	struct sbuf *sb;
 #endif
+	int error;
 
 	req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
 
@@ -346,7 +347,12 @@ l9p_respond(struct l9p_request *req, int errnum)
 	sbuf_delete(sb);
 #endif
 
-	if (l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version) != 0) {
+	error = l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version);
+
+	if (!shutdown)
+		ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
+
+	if (error != 0) {
 		L9P_LOG(L9P_ERROR, "cannot pack response");
 		goto out;
 	}

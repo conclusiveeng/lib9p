@@ -161,7 +161,7 @@ l9p_connection_close(struct l9p_connection *conn)
 	ht_iter(&conn->lc_requests, &iter);
 	while ((req = ht_next(&iter)) != NULL) {
 		/* XXX need to know if there is anyone listening */
-		l9p_respond(req, EINTR);
+		l9p_respond(req, EINTR, true);
 		ht_remove_at_iter(&iter);
 	}
 

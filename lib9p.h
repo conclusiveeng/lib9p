@@ -104,7 +104,6 @@ struct l9p_fid;
  * memory requirements there are more places to look.)
  */
 struct l9p_request {
-	uint32_t lr_tag;
 	struct l9p_message lr_req_msg;
 	struct l9p_message lr_resp_msg;
 	union l9p_fcall lr_req;

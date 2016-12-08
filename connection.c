@@ -129,7 +129,12 @@ l9p_connection_recv(struct l9p_connection *conn, const struct iovec *iov,
 		return;
 	}
 
-	l9p_threadpool_enqueue(&conn->lc_tp, req);
+	/*
+	 * NB: it's up to l9p_threadpool_run to decide whether
+	 * to queue the work or to run it immediately and wait
+	 * (it must do the latter for Tflush requests).
+	 */
+	l9p_threadpool_run(&conn->lc_tp, req);
 }
 
 void

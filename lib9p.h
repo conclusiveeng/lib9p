@@ -102,6 +102,14 @@ enum l9p_version {
 	L9P_2000L = 3
 };
 
+/*
+ * This structure is used for unpacking (decoding) incoming
+ * requests and packing (encoding) outgoing results.  It has its
+ * own copy of the iov array, with its own counters for working
+ * through that array, but it borrows the actual DATA from the
+ * original iov array associated with the original request (see
+ * below).
+ */
 struct l9p_message {
 	enum l9p_pack_mode lm_mode;
 	struct iovec lm_iov[L9P_MAX_IOV];
@@ -114,7 +122,43 @@ struct l9p_message {
 struct l9p_fid;
 
 /*
+ * Each request has a "flush state", initally NONE meaning no
+ * Tflush affected the request.
+ *
+ * If a Tflush comes in before we ever assign a work thread,
+ * the flush state goes to FLUSHED_NOT_RUN.
+ *
+ * If a Tflush comes in after we assign a work thread, the
+ * flush state goes to FLUSH_REQUESTED.  The flush request may
+ * be too late: the request might finish anyway.  Or it might
+ * be soon enough to abort.  In all cases, though, the
+ * operation requesting the flush (the "flusher") must wait for
+ * the other request (the "flushee") to go through the respond
+ * path.  The respond routine gets to decide whether to send a
+ * normal response, send an error, or drop the request
+ * entirely.
+ *
+ * There's one especially annoying case: what if a Tflush comes in
+ * *while* we're sending a response?  In this case the flush has
+ * to wait for the response to go out.  This means responses have
+ * to hold the lock starting from "remove tag from table"
+ * until after "response sent or at least queued (in order)".
+ */
+enum l9p_flushstate {
+	L9P_FLUSH_NONE = 0,		/* must be zero */
+	L9P_FLUSH_NOT_RUN,		/* not even started before flush */
+	L9P_FLUSH_REQUESTED,		/* started, then someone said flush */
+	L9P_FLUSH_RESPONDING		/* too late, already responding */
+};
+
+/*
  * Data structure for a request/response pair (Tfoo/Rfoo).
+ *
+ * Note that the response is not formatted out into raw data
+ * (overwriting the request raw data) until we are really
+ * responding, with the exception of read operations Tread
+ * and Treaddir, which overlay their result-data into the
+ * iov array in the process of reading.
  *
  * We have room for two incoming fids, in case we are
  * using 9P2000.L protocol.  Note that nothing that uses two
@@ -122,20 +166,37 @@ struct l9p_fid;
  * union of lr_fid2 and lr_newfid, but keeping them separate
  * is probably a bit less error-prone.  (If we want to shave
  * memory requirements there are more places to look.)
+ *
+ * (The fid, fid2, and newfid fields should be removed via
+ * reorganization, as they are only used for smuggling data
+ * between request.c and the backend and should just be
+ * parameters to backend ops.)
  */
 struct l9p_request {
-	struct l9p_message lr_req_msg;
-	struct l9p_message lr_resp_msg;
-	union l9p_fcall lr_req;
-	union l9p_fcall lr_resp;
+	struct l9p_message lr_req_msg;	/* for unpacking the request */
+	struct l9p_message lr_resp_msg;	/* for packing the response */
+	union l9p_fcall lr_req;		/* the request, decoded/unpacked */
+	union l9p_fcall lr_resp;	/* the response, not yet packed */
+
 	struct l9p_fid *lr_fid;
 	struct l9p_fid *lr_fid2;
 	struct l9p_fid *lr_newfid;
-	struct l9p_connection *lr_conn;
-	void *lr_aux;
-	struct iovec lr_data_iov[L9P_MAX_IOV];
-	size_t lr_data_niov;
-	STAILQ_ENTRY(l9p_request) lr_link;
+
+	struct l9p_connection *lr_conn;	/* containing connection */
+	void *lr_aux;			/* reserved for transport layer */
+
+	struct iovec lr_data_iov[L9P_MAX_IOV];	/* iovecs for req + resp */
+	size_t lr_data_niov;			/* actual size of data_iov */
+
+	/* proteced by threadpool mutex */
+	struct l9p_worker *lr_worker;		/* worker thread running us */
+	STAILQ_ENTRY(l9p_request) lr_worklink;	/* threadpool workqueue */
+	bool	lr_flushee_done;		/* used if we're a flusher */
+
+	/* protected by tag hash table lock */
+	enum l9p_flushstate lr_flushstate;	/* flush state if flushee */
+	struct l9p_request_queue lr_flushq;	/* q of flushers */
+	STAILQ_ENTRY(l9p_request) lr_flushlink;	/* link w/in flush queue */
 };
 
 /* N.B.: these dirents are variable length and for .L only */

@@ -44,13 +44,13 @@
 #include "log.h"
 #include "linux_errno.h"
 #include "backend/backend.h"
+#include "threadpool.h"
 
 #define N(x)    (sizeof(x) / sizeof(x[0]))
 
 static int l9p_dispatch_tversion(struct l9p_request *req);
 static int l9p_dispatch_tattach(struct l9p_request *req);
 static int l9p_dispatch_tclunk(struct l9p_request *req);
-static int l9p_dispatch_tflush(struct l9p_request *req);
 static int l9p_dispatch_tcreate(struct l9p_request *req);
 static int l9p_dispatch_topen(struct l9p_request *req);
 static int l9p_dispatch_tread(struct l9p_request *req);
@@ -92,7 +92,7 @@ static const struct l9p_handler l9p_handlers_base[] = {
 	{L9P_TVERSION, l9p_dispatch_tversion},
 	{L9P_TATTACH, l9p_dispatch_tattach},
 	{L9P_TCLUNK, l9p_dispatch_tclunk},
-	{L9P_TFLUSH, l9p_dispatch_tflush},
+	{L9P_TFLUSH, l9p_threadpool_tflush},
 	{L9P_TCREATE, l9p_dispatch_tcreate},
 	{L9P_TOPEN, l9p_dispatch_topen},
 	{L9P_TREAD, l9p_dispatch_tread},
@@ -106,7 +106,7 @@ static const struct l9p_handler l9p_handlers_dotu[] = {
 	{L9P_TVERSION, l9p_dispatch_tversion},
 	{L9P_TATTACH, l9p_dispatch_tattach},
 	{L9P_TCLUNK, l9p_dispatch_tclunk},
-	{L9P_TFLUSH, l9p_dispatch_tflush},
+	{L9P_TFLUSH, l9p_threadpool_tflush},
 	{L9P_TCREATE, l9p_dispatch_tcreate},
 	{L9P_TOPEN, l9p_dispatch_topen},
 	{L9P_TREAD, l9p_dispatch_tread},
@@ -120,7 +120,7 @@ static const struct l9p_handler l9p_handlers_dotL[] = {
 	{L9P_TVERSION, l9p_dispatch_tversion},
 	{L9P_TATTACH, l9p_dispatch_tattach},
 	{L9P_TCLUNK, l9p_dispatch_tclunk},
-	{L9P_TFLUSH, l9p_dispatch_tflush},
+	{L9P_TFLUSH, l9p_threadpool_tflush},
 	{L9P_TCREATE, l9p_dispatch_tcreate},
 	{L9P_TOPEN, l9p_dispatch_topen},
 	{L9P_TREAD, l9p_dispatch_tread},
@@ -313,15 +313,30 @@ e2linux(int errnum)
 	return (LINUX_ENOTRECOVERABLE);	/* ??? */
 }
 
+/*
+ * Send response to request, or possibly drop request if it's
+ * been flushed.  We also need to know whether to remove the
+ * request from the tag hash table (yes, unless shutting down).
+ */
 void
 l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 {
 	struct l9p_connection *conn = req->lr_conn;
 	size_t iosize;
+	enum l9p_flushstate flushstate;
 #if defined(L9P_DEBUG)
 	struct sbuf *sb;
+	char *ftype;
+	char impossible_buf[40];
 #endif
+	bool drop;
 	int error;
+
+	/* update flush-state (it's protected by request tag lock) */
+	ht_rdlock(&conn->lc_requests);
+	flushstate = req->lr_flushstate;
+	req->lr_flushstate = L9P_FLUSH_RESPONDING;
+	ht_unlock(&conn->lc_requests);
 
 	req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
 
@@ -343,17 +358,58 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 	l9p_describe_fcall(&req->lr_resp, conn->lc_version, sb);
 	sbuf_finish(sb);
 
-	L9P_LOG(L9P_DEBUG, "%s", sbuf_data(sb));
+	switch (flushstate) {
+	case L9P_FLUSH_NONE:
+		ftype = "";
+		break;
+	case L9P_FLUSH_NOT_RUN:
+		ftype = "FLUSHed (never run): ";
+		break;
+	case L9P_FLUSH_REQUESTED:
+		ftype = "FLUSH requested while running: ";
+		break;
+	/* can't get L9P_FLUSH_RESPONDING here */
+	default:
+		snprintf(impossible_buf, sizeof(impossible_buf),
+		    "FLUSH impossible state %d", (int)flushstate);
+		ftype = impossible_buf;
+		break;
+	}
+	L9P_LOG(L9P_DEBUG, "%s%s", ftype, sbuf_data(sb));
 	sbuf_delete(sb);
 #endif
 
 	error = l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version);
 
-	if (!shutdown)
-		ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
-
+	/*
+	 * Decide whether to drop the response, or respond.
+	 */
+	drop = false;
 	if (error != 0) {
 		L9P_LOG(L9P_ERROR, "cannot pack response");
+		drop = true;
+	}
+#ifdef notyet
+	if (flushstate == L9P_FLUSH_NOT_RUN)
+		drop = true;
+	if (flushstate == L9P_FLUSH_REQUESTED && errnum != 0)
+		drop = true;
+#endif
+
+	/*
+	 * Now hold the connection hash table lock while we
+	 * take out the tag and send (or drop) the response.
+	 * This makes sure no one else can try to flush this
+	 * request.
+	 *
+	 * During shutdown we don't remove the tag etc, so
+	 * this goes away there.
+	 */
+	if (!shutdown) {
+		ht_wrlock(&conn->lc_requests);
+		ht_remove_locked(&conn->lc_requests, req->lr_req.hdr.tag);
+	}
+	if (drop) {
 		conn->lc_lt.lt_drop_response(req,
 		    req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
 		    conn->lc_lt.lt_aux);
@@ -372,9 +428,19 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 		    req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
 		    iosize, conn->lc_lt.lt_aux);
 	}
+	if (!shutdown)
+		ht_unlock(&conn->lc_requests);
 
 	l9p_freefcall(&req->lr_req);
 	l9p_freefcall(&req->lr_resp);
+
+	/*
+	 * Last, if there were flushers trying to flush this
+	 * request, tell them that they can now proceed -- we're
+	 * done responding, for good or ill.
+	 */
+	if (flushstate != L9P_FLUSH_NONE)
+		l9p_threadpool_flushee_done(req);
 
 	free(req);
 }
@@ -625,32 +691,6 @@ l9p_dispatch_tclunk(struct l9p_request *req)
 	/* fid is now gone regardless of any error return */
 	l9p_connection_remove_fid(conn, fid);
 	return (error);
-}
-
-static int
-l9p_dispatch_tflush(struct l9p_request *req __unused)
-{
-
-	/*
-	 * Tflush needs to coordinate with the backend:
-	 * when we spin off an asynchronous operation
-	 * (as a thread, or using AIO), the backend will
-	 * return a special "error" value indicating that
-	 * the request is still pending, and we will put
-	 * it on a queue.
-	 *
-	 * When we get a flush we'll look up the pending
-	 * request and attempt to cancel it.
-	 *
-	 * When the backend completes a spun-off operation
-	 * it will do an upcall to really finish the request.
-	 *
-	 * (Details, including any locking, are still TBD.)
-	 *
-	 * For now, the code is completely synchronous so
-	 * this is a no-op.
-	 */
-	return (0);
 }
 
 static int

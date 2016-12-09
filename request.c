@@ -314,42 +314,34 @@ e2linux(int errnum)
 }
 
 /*
- * Send response to request, or possibly drop request if it's
- * been flushed.  We also need to know whether to remove the
- * request from the tag hash table (yes, unless shutting down).
+ * Send response to request, or possibly just drop request.
+ * We also need to know whether to remove the request from
+ * the tag hash table.
  */
 void
-l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
+l9p_respond(struct l9p_request *req, bool drop, bool rmtag)
 {
 	struct l9p_connection *conn = req->lr_conn;
 	size_t iosize;
-	enum l9p_flushstate flushstate;
 #if defined(L9P_DEBUG)
 	struct sbuf *sb;
 	const char *ftype;
-	char impossible_buf[40];
 #endif
-	bool drop;
 	int error;
-
-	/* update flush-state (it's protected by request tag lock) */
-	ht_rdlock(&conn->lc_requests);
-	flushstate = req->lr_flushstate;
-	req->lr_flushstate = L9P_FLUSH_RESPONDING;
-	ht_unlock(&conn->lc_requests);
 
 	req->lr_resp.hdr.tag = req->lr_req.hdr.tag;
 
-	if (errnum == 0)
+	error = req->lr_error;
+	if (error == 0)
 		req->lr_resp.hdr.type = req->lr_req.hdr.type + 1;
 	else {
 		if (conn->lc_version == L9P_2000L) {
 			req->lr_resp.hdr.type = L9P_RLERROR;
-			req->lr_resp.error.errnum = (uint32_t)e2linux(errnum);
+			req->lr_resp.error.errnum = (uint32_t)e2linux(error);
 		} else {
 			req->lr_resp.hdr.type = L9P_RERROR;
-			req->lr_resp.error.ename = strerror(errnum);
-			req->lr_resp.error.errnum = (uint32_t)e29p(errnum);
+			req->lr_resp.error.ename = strerror(error);
+			req->lr_resp.error.errnum = (uint32_t)e29p(error);
 		}
 	}
 
@@ -358,7 +350,7 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 	l9p_describe_fcall(&req->lr_resp, conn->lc_version, sb);
 	sbuf_finish(sb);
 
-	switch (flushstate) {
+	switch (req->lr_flushstate) {
 	case L9P_FLUSH_NONE:
 		ftype = "";
 		break;
@@ -368,46 +360,24 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 	case L9P_FLUSH_REQUESTED:
 		ftype = "FLUSH requested while running: ";
 		break;
-	case L9P_FLUSH_RESPONDING:
-		snprintf(impossible_buf, sizeof(impossible_buf),
-		    "FLUSH impossible state %d", (int)flushstate);
-		ftype = impossible_buf;
+	case L9P_FLUSH_TOOLATE:
+		ftype = "FLUSH requested too late: ";
 		break;
 	}
-	L9P_LOG(L9P_DEBUG, "%s%s", ftype, sbuf_data(sb));
+	L9P_LOG(L9P_DEBUG, "%s%s%s",
+	    drop ? "DROP: " : "", ftype, sbuf_data(sb));
 	sbuf_delete(sb);
 #endif
 
-	error = l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version);
-
-	/*
-	 * Decide whether to drop the response, or respond.
-	 */
-	drop = false;
+	error = drop ? 0 :
+	    l9p_pufcall(&req->lr_resp_msg, &req->lr_resp, conn->lc_version);
+	if (rmtag)
+		ht_remove(&conn->lc_requests, req->lr_req.hdr.tag);
 	if (error != 0) {
 		L9P_LOG(L9P_ERROR, "cannot pack response");
 		drop = true;
 	}
-#ifdef notyet
-	if (flushstate == L9P_FLUSH_NOT_RUN)
-		drop = true;
-	if (flushstate == L9P_FLUSH_REQUESTED && errnum != 0)
-		drop = true;
-#endif
 
-	/*
-	 * Now hold the connection hash table lock while we
-	 * take out the tag and send (or drop) the response.
-	 * This makes sure no one else can try to flush this
-	 * request.
-	 *
-	 * During shutdown we don't remove the tag etc, so
-	 * this goes away there.
-	 */
-	if (!shutdown) {
-		ht_wrlock(&conn->lc_requests);
-		ht_remove_locked(&conn->lc_requests, req->lr_req.hdr.tag);
-	}
 	if (drop) {
 		conn->lc_lt.lt_drop_response(req,
 		    req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
@@ -427,19 +397,9 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 		    req->lr_resp_msg.lm_iov, req->lr_resp_msg.lm_niov,
 		    iosize, conn->lc_lt.lt_aux);
 	}
-	if (!shutdown)
-		ht_unlock(&conn->lc_requests);
 
 	l9p_freefcall(&req->lr_req);
 	l9p_freefcall(&req->lr_resp);
-
-	/*
-	 * Last, if there were flushers trying to flush this
-	 * request, tell them that they can now proceed -- we're
-	 * done responding, for good or ill.
-	 */
-	if (flushstate != L9P_FLUSH_NONE)
-		l9p_threadpool_flushee_done(req);
 
 	free(req);
 }

@@ -151,8 +151,15 @@ l9p_connection_close(struct l9p_connection *conn)
 	L9P_LOG(L9P_DEBUG, "draining pending requests");
 	ht_iter(&conn->lc_requests, &iter);
 	while ((req = ht_next(&iter)) != NULL) {
-		/* XXX need to know if there is anyone listening */
-		l9p_respond(req, EINTR, true);
+#ifdef notyet
+		/* XXX would be good to know if there is anyone listening */
+		if (anyone listening) {
+			/* XXX crude - ops like Tclunk should succeed */
+			req->lr_error = EINTR;
+			l9p_respond(req, false, false);
+		} else
+#endif
+		l9p_respond(req, true, false);	/* use no-answer path */
 		ht_remove_at_iter(&iter);
 	}
 

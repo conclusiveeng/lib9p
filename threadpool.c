@@ -35,34 +35,129 @@
 #include "lib9p.h"
 #include "threadpool.h"
 
+static void l9p_threadpool_rflush(struct l9p_threadpool *tp,
+    struct l9p_request *req);
+
+static void *
+l9p_responder(void *arg)
+{
+	struct l9p_threadpool *tp;
+	struct l9p_worker *worker = arg;
+	struct l9p_request *req;
+
+	tp = worker->ltw_tp;
+	for (;;) {
+		/* get next reply to send */
+		pthread_mutex_lock(&tp->ltp_mtx);
+		while (STAILQ_EMPTY(&tp->ltp_replyq) && !worker->ltw_exiting)
+			pthread_cond_wait(&tp->ltp_reply_cv, &tp->ltp_mtx);
+		if (worker->ltw_exiting) {
+			pthread_mutex_unlock(&tp->ltp_mtx);
+			break;
+		}
+
+		/* off reply queue */
+		req = STAILQ_FIRST(&tp->ltp_replyq);
+		STAILQ_REMOVE_HEAD(&tp->ltp_replyq, lr_worklink);
+
+		/* request is now in final glide path, can't be Tflush-ed */
+		req->lr_workstate = L9P_WS_REPLYING;
+
+		/* any flushers waiting for this request can go now */
+		if (req->lr_flushstate != L9P_FLUSH_NONE)
+			l9p_threadpool_rflush(tp, req);
+
+		pthread_mutex_unlock(&tp->ltp_mtx);
+
+		/* send response */
+#ifdef notyet
+		/* might want something simpler, e.g., req->lr_drop? */
+		drop = req->lr_flushstate == L9P_FLUSH_NOT_RUN ||
+		    (req->lr_flushstate == L9P_FLUSH_REQUESTED &&
+		     req->lr_error != 0);
+		l9p_respond(req, drop, true);
+#else
+		l9p_respond(req, false, true);
+#endif
+	}
+	return (NULL);
+}
+
 static void *
 l9p_worker(void *arg)
 {
 	struct l9p_threadpool *tp;
 	struct l9p_worker *worker = arg;
 	struct l9p_request *req;
-	int error;
 
 	tp = worker->ltw_tp;
+	pthread_mutex_lock(&tp->ltp_mtx);
 	for (;;) {
-		pthread_mutex_lock(&tp->ltp_mtx);
-
-		while (STAILQ_EMPTY(&tp->ltp_queue) && !worker->ltw_exiting)
+		while (STAILQ_EMPTY(&tp->ltp_workq) && !worker->ltw_exiting)
 			pthread_cond_wait(&tp->ltp_work_cv, &tp->ltp_mtx);
-
 		if (worker->ltw_exiting)
 			break;
 
-		req = STAILQ_FIRST(&tp->ltp_queue);
-		STAILQ_REMOVE_HEAD(&tp->ltp_queue, lr_worklink);
-
+		/* off work queue; now work-in-progress, by us */
+		req = STAILQ_FIRST(&tp->ltp_workq);
+		STAILQ_REMOVE_HEAD(&tp->ltp_workq, lr_worklink);
+		req->lr_workstate = L9P_WS_INPROGRESS;
+		req->lr_worker = worker;
 		pthread_mutex_unlock(&tp->ltp_mtx);
-		error = l9p_dispatch_request(req);
-		l9p_respond(req, error, false);
-	}
 
+		/* actually try the request */
+		req->lr_error = l9p_dispatch_request(req);
+
+		/* move to responder queue, updating work-state */
+		pthread_mutex_lock(&tp->ltp_mtx);
+		req->lr_workstate = L9P_WS_RESPQUEUED;
+		req->lr_worker = NULL;
+		STAILQ_INSERT_TAIL(&tp->ltp_replyq, req, lr_worklink);
+
+		/* signal the responder */
+		pthread_cond_signal(&tp->ltp_reply_cv);
+	}
 	pthread_mutex_unlock(&tp->ltp_mtx);
 	return (NULL);
+}
+
+/*
+ * Just before finally replying to a request that got touched by
+ * a Tflush request, we enqueue its flushers (requests of type
+ * Tflush, which are now on the flushee's lr_flushq) onto the
+ * response queue.
+ */
+static void
+l9p_threadpool_rflush(struct l9p_threadpool *tp, struct l9p_request *req)
+{
+	struct l9p_request *flusher;
+
+	/*
+	 * https://swtch.com/plan9port/man/man9/flush.html says:
+	 *
+	 * "Should multiple Tflushes be received for a pending
+	 * request, they must be answered in order.  A Rflush for
+	 * any of the multiple Tflushes implies an answer for all
+	 * previous ones.  Therefore, should a server receive a
+	 * request and then multiple flushes for that request, it
+	 * need respond only to the last flush."  This means
+	 * we could march through the queue of flushers here,
+	 * marking all but the last one as "to be dropped" rather
+	 * than "to be replied-to".
+	 *
+	 * However, we'll leave that for later, if ever -- it
+	 * should be harmless to respond to each, in order.
+	 */
+	STAILQ_FOREACH(flusher, &req->lr_flushq, lr_flushlink) {
+		flusher->lr_workstate = L9P_WS_RESPQUEUED;
+#ifdef notdef
+		if (not the last) {
+			flusher->lr_flushstate = L9P_FLUSH_NOT_RUN;
+			/* or, flusher->lr_drop = true ? */
+		}
+#endif
+		STAILQ_INSERT_TAIL(&tp->ltp_replyq, flusher, lr_worklink);
+	}
 }
 
 int
@@ -73,7 +168,7 @@ l9p_threadpool_init(struct l9p_threadpool *tp, int size)
 	char threadname[16];
 #endif
 	int error;
-	int i;
+	int i, nworkers, nresponders;
 
 	if (size <= 0)
 		return (EINVAL);
@@ -81,44 +176,60 @@ l9p_threadpool_init(struct l9p_threadpool *tp, int size)
 	if (error)
 		return (error);
 	error = pthread_cond_init(&tp->ltp_work_cv, NULL);
-	if (error) {
-		pthread_mutex_destroy(&tp->ltp_mtx);
-		return (error);
-	}
-	error = pthread_cond_init(&tp->ltp_flush_cv, NULL);
-	if (error) {
-		pthread_cond_destroy(&tp->ltp_work_cv);
-		pthread_mutex_destroy(&tp->ltp_mtx);
-		return (error);
-	}
-	STAILQ_INIT(&tp->ltp_queue);
+	if (error)
+		goto fail_work_cv;
+	error = pthread_cond_init(&tp->ltp_reply_cv, NULL);
+	if (error)
+		goto fail_reply_cv;
+	STAILQ_INIT(&tp->ltp_workq);
 	LIST_INIT(&tp->ltp_workers);
 
-	for (i = 0; i < size; i++) {
+	nresponders = 0;
+	nworkers = 0;
+	for (i = 0; i <= size; i++) {
 		worker = calloc(1, sizeof(struct l9p_worker));
 		worker->ltw_tp = tp;
-		error = pthread_create(&worker->ltw_thread, NULL, &l9p_worker,
+		worker->ltw_responder = i == 0;
+		error = pthread_create(&worker->ltw_thread, NULL,
+		    worker->ltw_responder ? l9p_responder : l9p_worker,
 		    (void *)worker);
 		if (error) {
 			free(worker);
 			break;
 		}
+		if (worker->ltw_responder)
+			nresponders++;
+		else
+			nworkers++;
 
 #if defined(__FreeBSD__)
-		sprintf(threadname, "9p-worker:%d", i);
-		pthread_set_name_np(worker->ltw_thread, threadname);
+		if (worker->ltw_responder) {
+			pthread_set_name_np(worker->ltw_thread, "9p-responder");
+		} else {
+			sprintf(threadname, "9p-worker:%d", i - 1);
+			pthread_set_name_np(worker->ltw_thread, threadname);
+		}
 #endif
 
 		LIST_INSERT_HEAD(&tp->ltp_workers, worker, ltw_link);
 	}
-	/* if we made any workers, that's sufficient */
-	if (i > 0)
-		error = 0;
-	if (error) {
-		pthread_cond_destroy(&tp->ltp_flush_cv);
-		pthread_cond_destroy(&tp->ltp_work_cv);
-		pthread_mutex_destroy(&tp->ltp_mtx);
+	if (nresponders == 0 || nworkers == 0) {
+		/* need the one responder, and at least one worker */
+		l9p_threadpool_shutdown(tp);
+		return (error);
 	}
+	return (0);
+
+	/*
+	 * We could avoid these labels by having multiple destroy
+	 * paths (one for each error case), or by having booleans
+	 * for which variables were initialized.  Neither is very
+	 * appealing...
+	 */
+fail_reply_cv:
+	pthread_cond_destroy(&tp->ltp_work_cv);
+fail_work_cv:
+	pthread_mutex_destroy(&tp->ltp_mtx);
 
 	return (error);
 }
@@ -136,10 +247,13 @@ l9p_threadpool_run(struct l9p_threadpool *tp, struct l9p_request *req)
 	 * run them through the regular dispatch mechanism.)
 	 */
 	if (req->lr_req.hdr.type == L9P_TFLUSH) {
+		/* not on a work queue yet so we can touch state */
+		req->lr_workstate = L9P_WS_IMMEDIATE;
 		(void) l9p_dispatch_request(req);
 	} else {
 		pthread_mutex_lock(&tp->ltp_mtx);
-		STAILQ_INSERT_TAIL(&tp->ltp_queue, req, lr_worklink);
+		req->lr_workstate = L9P_WS_NOTSTARTED;
+		STAILQ_INSERT_TAIL(&tp->ltp_workq, req, lr_worklink);
 		pthread_cond_signal(&tp->ltp_work_cv);
 		pthread_mutex_unlock(&tp->ltp_mtx);
 	}
@@ -148,130 +262,145 @@ l9p_threadpool_run(struct l9p_threadpool *tp, struct l9p_request *req)
 /*
  * Run a Tflush request.  Called via l9p_dispatch_request() since
  * it has some debug code in it, but not called from worker thread.
- * This means we have to do the l9p_respond in line here, unless we
- * can put this request into a worker thread.
  */
 int
 l9p_threadpool_tflush(struct l9p_request *req)
 {
 	struct l9p_connection *conn;
-	struct l9p_threadpool *tp = NULL;
+	struct l9p_threadpool *tp;
 	struct l9p_request *flushee;
 	uint16_t oldtag;
-	bool first_flush, we_took_flushee = false;
+	enum l9p_flushstate nstate;
 
 	/*
 	 * Find what we're supposed to flush (the flushee, as it were).
 	 */
+	req->lr_error = 0;	/* Tflush always succeeds */
 	conn = req->lr_conn;
+	tp = &conn->lc_tp;
 	oldtag = req->lr_req.tflush.oldtag;
 	ht_wrlock(&conn->lc_requests);
-	flushee = ht_find(&conn->lc_requests, oldtag);
+	flushee = ht_find_locked(&conn->lc_requests, oldtag);
 	if (flushee == NULL) {
 		/*
 		 * Nothing to flush!  The old request must have
-		 * been done and gone already.  Just take this
-		 * Tflush out and say "OK".
+		 * been done and gone already.  Just queue this
+		 * Tflush for a success reply.
 		 */
-		ht_remove_locked(&conn->lc_requests, req->lr_req.hdr.tag);
 		ht_unlock(&conn->lc_requests);
-		l9p_respond(req, 0, false);
-		return (0);
+		pthread_mutex_lock(&tp->ltp_mtx);
+		goto done;
 	}
 
 	/*
-	 * OK, there is something to flush.  It might already be
-	 * being worked-on, in which case we may need to boot the
-	 * worker in the head to wake it from some blocking call.
-	 * Or, it might not be in a work thread at all yet.
-	 *
-	 * Meanwhile it might already have some flush operations
-	 * attached to it, or not.
-	 *
-	 * In any case, add us to the list of Tflush-es that
-	 * are waiting for this request.
-	 *
-	 * Note that we're still holding the hash table tag lock
-	 * while we take the threadpool mutex.
+	 * Found the original request.  We'll need to inspect its
+	 * work-state to figure out what to do.
 	 */
-	if (flushee->lr_flushstate == L9P_FLUSH_NONE) {
-		/*
-		 * Never been flush-requested yet.  Set up its
-		 * flushq and mark it as "has flush request(s)".
-		 * This is the first time someone said to flush
-		 * the flushee.
-		 */
-		STAILQ_INIT(&flushee->lr_flushq);
-		flushee->lr_flushstate = L9P_FLUSH_NOT_RUN;
-		first_flush = true;
-	} else
-		first_flush = false;
-	STAILQ_INSERT_TAIL(&flushee->lr_flushq, req, lr_flushlink);
-
-	tp = &conn->lc_tp;
 	pthread_mutex_lock(&tp->ltp_mtx);
-	if (first_flush && flushee->lr_worker == NULL) {
-		/*
-		 * There is no work thread.  Pull the original
-		 * request off the threadpool queue: we'll abort
-		 * it ourselves.
-		 */
-		STAILQ_REMOVE(&tp->ltp_queue, flushee,
-		    l9p_request, lr_worklink);
-		we_took_flushee = true;
-	} else {
-		/*
-		 * There's a work thread.  Kick it to make
-		 * make it get out of blocking system calls.
-		 */
-		/* pthread_kill(...) -- not yet */
-	}
-	pthread_mutex_unlock(&tp->ltp_mtx);
 	ht_unlock(&conn->lc_requests);
 
-	if (we_took_flushee) {
+	nstate = L9P_FLUSH_REQUESTED;
+	switch (flushee->lr_workstate) {
+
+	case L9P_WS_NOTSTARTED:
 		/*
-		 * We took the flushee out of the work queue.
-		 * There's no one else left to send a response
-		 * so now we have to do that.
+		 * Flushee is on work queue, but not yet being
+		 * handled by a worker.  Pull it off the work queue.
+		 * Mark it as flushed, failed, and never actually run.
+		 *
+		 * STAILQ_REMOVE is slow: maybe leave it in work
+		 * queue, but marked with a new work state and
+		 * let the worker move it later?  Tflush should be
+		 * rare though.
 		 */
-		ht_remove_locked(&conn->lc_requests, flushee->lr_req.hdr.tag);
-		l9p_respond(flushee, EINTR, false);
-	} else {
+		STAILQ_REMOVE(&tp->ltp_workq, flushee,
+		    l9p_request, lr_worklink);
+		flushee->lr_error = EINTR;
+		nstate = L9P_FLUSH_NOT_RUN;
+		break;
+
+	case L9P_WS_IMMEDIATE:
 		/*
-		 * We *didn't* take the flushee out of the work
-		 * queue.  Instead, the worker thread has to
-		 * finish the flushee somehow (whether success
-		 * or failure) and then report back to us
-		 * when we can reply to this flush request.
+		 * This state only applies to Tflush requests, and
+		 * flushing a Tflush is illegal.  But we'll do nothing
+		 * special here, which will make us act like a flush
+		 * request for the flushee that arrived too late to
+		 * do anything about the flushee.
 		 */
-		pthread_mutex_lock(&tp->ltp_mtx);
-		while (!req->lr_flushee_done)
-			pthread_cond_wait(&tp->ltp_flush_cv, &tp->ltp_mtx);
-		pthread_mutex_unlock(&tp->ltp_mtx);
+		break;
+
+	case L9P_WS_INPROGRESS:
+		/*
+		 * Worker thread flushee->lr_worker is working on it.
+		 * Kick it to get it out of blocking system calls.
+		 * (This requires that it carefully set up some
+		 * signal handlers, and may be FreeBSD-dependent,
+		 * it probably cannot be handled this way on MacOS.)
+		 */
+#ifdef notyet
+		pthread_kill(...);
+#endif
+		break;
+
+	case L9P_WS_RESPQUEUED:
+		/*
+		 * The flushee is already in the response queue.
+		 * We'll just mark it as having had some flush
+		 * action applied.
+		 */
+		nstate = L9P_FLUSH_TOOLATE;
+		break;
+
+	case L9P_WS_REPLYING:
+		/*
+		 * Although we found the flushee, it's too late to
+		 * make us depend on it: it's already heading out
+		 * the door as a reply.
+		 *
+		 * We don't want to do anything to the flushee.
+		 * Instead, we want to work the same way as if
+		 * we had never found the tag.
+		 */
+		goto done;
 	}
+
+	/*
+	 * Now add us to the list of Tflush-es that are waiting
+	 * for the flushee (creating the list if needed, i.e., if
+	 * this is the first Tflush for the flushee).  We (req)
+	 * will get queued for reply later, when the responder
+	 * processes the flushee and calls l9p_threadpool_rflush().
+	 */
+	if (flushee->lr_flushstate == L9P_FLUSH_NONE)
+		STAILQ_INIT(&flushee->lr_flushq);
+	flushee->lr_flushstate = nstate;
+	STAILQ_INSERT_TAIL(&flushee->lr_flushq, req, lr_flushlink);
+
+	if (nstate == L9P_FLUSH_NOT_RUN) {
+		/*
+		 * We took the flushee out of the work queue, and
+		 * now it's on NO queue.  Put it on the response
+		 * queue.  (Should we put it at the head?)
+		 */
+		flushee->lr_workstate = L9P_WS_RESPQUEUED;
+		STAILQ_INSERT_TAIL(&tp->ltp_replyq, flushee, lr_worklink);
+		pthread_cond_signal(&tp->ltp_reply_cv);
+	}
+
+	pthread_mutex_unlock(&tp->ltp_mtx);
 
 	return (0);
-}
 
-/*
- * Called from l9p_response after sending the response to a
- * request that has been marked as being-flushed (a flushee).
- * Wake anyone waiting for this request.  The flushee will be
- * free() when we return, so we had better get all of them now.
- */
-void
-l9p_threadpool_flushee_done(struct l9p_request *req)
-{
-	struct l9p_threadpool *tp = &req->lr_conn->lc_tp;
-	struct l9p_request *flusher;
-
-	pthread_mutex_lock(&tp->ltp_mtx);
-	STAILQ_FOREACH(flusher, &req->lr_flushq, lr_flushlink) {
-		flusher->lr_flushee_done = true;
-	}
+done:
+	/*
+	 * This immediate op is ready to be replied-to now, so just
+	 * stick it onto the reply queue.
+	 */
+	req->lr_workstate = L9P_WS_RESPQUEUED;
+	STAILQ_INSERT_TAIL(&tp->ltp_replyq, req, lr_worklink);
 	pthread_mutex_unlock(&tp->ltp_mtx);
-	pthread_cond_broadcast(&tp->ltp_flush_cv);
+	pthread_cond_signal(&tp->ltp_reply_cv);
+	return (0);
 }
 
 int
@@ -282,13 +411,16 @@ l9p_threadpool_shutdown(struct l9p_threadpool *tp)
 	LIST_FOREACH_SAFE(worker, &tp->ltp_workers, ltw_link, tmp) {
 		pthread_mutex_lock(&tp->ltp_mtx);
 		worker->ltw_exiting = true;
-		pthread_cond_broadcast(&tp->ltp_work_cv);
+		if (worker->ltw_responder)
+			pthread_cond_signal(&tp->ltp_reply_cv);
+		else
+			pthread_cond_broadcast(&tp->ltp_work_cv);
 		pthread_mutex_unlock(&tp->ltp_mtx);
 		pthread_join(worker->ltw_thread, NULL);
 		LIST_REMOVE(worker, ltw_link);
 		free(worker);
 	}
-	pthread_cond_destroy(&tp->ltp_flush_cv);
+	pthread_cond_destroy(&tp->ltp_reply_cv);
 	pthread_cond_destroy(&tp->ltp_work_cv);
 	pthread_mutex_destroy(&tp->ltp_mtx);
 

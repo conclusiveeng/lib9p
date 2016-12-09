@@ -122,36 +122,6 @@ struct l9p_message {
 struct l9p_fid;
 
 /*
- * Each request has a "flush state", initally NONE meaning no
- * Tflush affected the request.
- *
- * If a Tflush comes in before we ever assign a work thread,
- * the flush state goes to FLUSHED_NOT_RUN.
- *
- * If a Tflush comes in after we assign a work thread, the
- * flush state goes to FLUSH_REQUESTED.  The flush request may
- * be too late: the request might finish anyway.  Or it might
- * be soon enough to abort.  In all cases, though, the
- * operation requesting the flush (the "flusher") must wait for
- * the other request (the "flushee") to go through the respond
- * path.  The respond routine gets to decide whether to send a
- * normal response, send an error, or drop the request
- * entirely.
- *
- * There's one especially annoying case: what if a Tflush comes in
- * *while* we're sending a response?  In this case the flush has
- * to wait for the response to go out.  This means responses have
- * to hold the lock starting from "remove tag from table"
- * until after "response sent or at least queued (in order)".
- */
-enum l9p_flushstate {
-	L9P_FLUSH_NONE = 0,		/* must be zero */
-	L9P_FLUSH_NOT_RUN,		/* not even started before flush */
-	L9P_FLUSH_REQUESTED,		/* started, then someone said flush */
-	L9P_FLUSH_RESPONDING		/* too late, already responding */
-};
-
-/*
  * Data structure for a request/response pair (Tfoo/Rfoo).
  *
  * Note that the response is not formatted out into raw data
@@ -188,13 +158,15 @@ struct l9p_request {
 	struct iovec lr_data_iov[L9P_MAX_IOV];	/* iovecs for req + resp */
 	size_t lr_data_niov;			/* actual size of data_iov */
 
+	int	lr_error;		/* result from l9p_dispatch_request */
+
 	/* proteced by threadpool mutex */
-	struct l9p_worker *lr_worker;		/* worker thread running us */
-	STAILQ_ENTRY(l9p_request) lr_worklink;	/* threadpool workqueue */
-	bool	lr_flushee_done;		/* used if we're a flusher */
+	enum l9p_workstate lr_workstate;	/* threadpool: work state */
+	enum l9p_flushstate lr_flushstate;	/* flush state if flushee */
+	struct l9p_worker *lr_worker;		/* threadpool: worker */
+	STAILQ_ENTRY(l9p_request) lr_worklink;	/* reserved to threadpool */
 
 	/* protected by tag hash table lock */
-	enum l9p_flushstate lr_flushstate;	/* flush state if flushee */
 	struct l9p_request_queue lr_flushq;	/* q of flushers */
 	STAILQ_ENTRY(l9p_request) lr_flushlink;	/* link w/in flush queue */
 };
@@ -262,7 +234,7 @@ void l9p_connection_remove_fid(struct l9p_connection *conn,
     struct l9p_fid *fid);
 
 int l9p_dispatch_request(struct l9p_request *req);
-void l9p_respond(struct l9p_request *req, int errnum, bool shutdown);
+void l9p_respond(struct l9p_request *req, bool drop, bool rmtag);
 
 void l9p_init_msg(struct l9p_message *msg, struct l9p_request *req,
     enum l9p_pack_mode mode);

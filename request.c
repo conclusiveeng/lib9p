@@ -368,8 +368,7 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 	case L9P_FLUSH_REQUESTED:
 		ftype = "FLUSH requested while running: ";
 		break;
-	/* can't get L9P_FLUSH_RESPONDING here */
-	default:
+	case L9P_FLUSH_RESPONDING:
 		snprintf(impossible_buf, sizeof(impossible_buf),
 		    "FLUSH impossible state %d", (int)flushstate);
 		ftype = impossible_buf;

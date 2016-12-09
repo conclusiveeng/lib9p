@@ -326,7 +326,7 @@ l9p_respond(struct l9p_request *req, int errnum, bool shutdown)
 	enum l9p_flushstate flushstate;
 #if defined(L9P_DEBUG)
 	struct sbuf *sb;
-	char *ftype;
+	const char *ftype;
 	char impossible_buf[40];
 #endif
 	bool drop;

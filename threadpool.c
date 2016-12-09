@@ -181,7 +181,9 @@ l9p_threadpool_init(struct l9p_threadpool *tp, int size)
 	error = pthread_cond_init(&tp->ltp_reply_cv, NULL);
 	if (error)
 		goto fail_reply_cv;
+
 	STAILQ_INIT(&tp->ltp_workq);
+	STAILQ_INIT(&tp->ltp_replyq);
 	LIST_INIT(&tp->ltp_workers);
 
 	nresponders = 0;

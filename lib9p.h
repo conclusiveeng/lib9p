@@ -47,7 +47,7 @@
 #include "hashtable.h"
 
 #define L9P_DEFAULT_MSIZE   8192
-#define L9P_MAX_IOV         8
+#define L9P_MAX_IOV         128
 #define	L9P_NUMTHREADS      8
 
 struct l9p_request;

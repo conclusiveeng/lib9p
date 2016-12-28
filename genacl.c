@@ -71,6 +71,8 @@ l9p_ingroup(gid_t tid, gid_t gid, gid_t *gids, size_t ngids)
 	return (false);
 }
 
+/* #define ACE_DEBUG */
+
 /*
  * Note that NFSv4 tests are done on a "first match" basis.
  * That is, we check each ACE sequentially until we run out
@@ -95,6 +97,10 @@ l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
 {
 	uint32_t i;
 	struct l9p_ace *ace;
+#ifdef ACE_DEBUG
+	char *acetype, *allowdeny;
+	bool show_tid;
+#endif
 	bool match;
 	uid_t tid;
 
@@ -111,19 +117,40 @@ l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
 			/* audit, alarm - ignore */
 			continue;
 		}
+#ifdef ACE_DEBUG
+		show_tid = false;
+#endif
 		if (ace->ace_flags & L9P_ACEF_OWNER) {
+#ifdef ACE_DEBUG
+			acetype = "OWNER@";
+#endif
 			match = st->st_uid == uid;
 		} else if (ace->ace_flags & L9P_ACEF_GROUP) {
+#ifdef ACE_DEBUG
+			acetype = "GROUP@";
+#endif
 			match = l9p_ingroup(st->st_gid, gid, gids, ngids);
 		} else if (ace->ace_flags & L9P_ACEF_EVERYONE) {
+#ifdef ACE_DEBUG
+			acetype = "EVERYONE@";
+#endif
 			match = true;
 		} else {
 			if (ace->ace_idsize != sizeof(tid))
 				continue;
+#ifdef ACE_DEBUG
+			show_tid = true;
+#endif
 			memcpy(&tid, &ace->ace_idbytes, sizeof(tid));
 			if (ace->ace_flags & L9P_ACEF_IDENTIFIER_GROUP) {
+#ifdef ACE_DEBUG
+				acetype = "group";
+#endif
 				match = l9p_ingroup(tid, gid, gids, ngids);
 			} else {
+#ifdef ACE_DEBUG
+				acetype = "user";
+#endif
 				match = tid == uid;
 			}
 		}
@@ -133,14 +160,55 @@ l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
 		 * DENY means "stop now", ALLOW means allow these bits
 		 * and keep checking.
 		 */
+#ifdef ACE_DEBUG
+		allowdeny = ace->ace_type == L9P_ACET_ACCESS_DENIED ?
+		    "deny" : "allow";
+#endif
 		if (match && (ace->ace_mask & mask) != 0) {
+#ifdef ACE_DEBUG
+			if (show_tid)
+				L9P_LOG(L9P_DEBUG,
+				    "ACE: %s %s %d: mask 0x%x ace_mask 0x%x",
+				    allowdeny, acetype, (int)tid,
+				    (u_int)mask, (u_int)ace->ace_mask);
+			else
+				L9P_LOG(L9P_DEBUG,
+				    "ACE: %s %s: mask 0x%x ace_mask 0x%x",
+				    allowdeny, acetype,
+				    (u_int)mask, (u_int)ace->ace_mask);
+#endif
 			if (ace->ace_type == L9P_ACET_ACCESS_DENIED)
 				return (-1);
 			mask &= ~ace->ace_mask;
+#ifdef ACE_DEBUG
+			L9P_LOG(L9P_DEBUG, "clear 0x%x: now mask=0x%x",
+			    (u_int)ace->ace_mask, mask);
+#endif
+		} else {
+#ifdef ACE_DEBUG
+			if (show_tid)
+				L9P_LOG(L9P_DEBUG,
+				    "ACE: SKIP %s %s %d: "
+				    "match %d mask 0x%x ace_mask 0x%x",
+				    allowdeny, acetype, (int)tid,
+				    (int)match, (u_int)mask,
+				    (u_int)ace->ace_mask);
+			else
+				L9P_LOG(L9P_DEBUG,
+				    "ACE: SKIP %s %s: "
+				    "match %d mask 0x%x ace_mask 0x%x",
+				    allowdeny, acetype,
+				    (int)match, (u_int)mask,
+				    (u_int)ace->ace_mask);
+#endif
 		}
 	}
 
 	/* Return 1 if access definitely granted. */
+#ifdef ACE_DEBUG
+	L9P_LOG(L9P_DEBUG, "ACE: end of ACEs, mask now 0x%x: %s",
+	    mask, mask ? "no-definitive-answer" : "ALLOW");
+#endif
 	return (mask == 0 ? 1 : 0);
 }
 
@@ -166,6 +234,9 @@ l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
  * for doing operations on an existing file, such as reading or
  * writing data or attributes.  Pass in a null child/cstat if
  * that's not applicable, such as creating a new file/dir.
+ *
+ * NB: it's probably wise to allow the owner of any file to update
+ * the ACLs of that file, but we leave that test to the caller.
  */
 int l9p_acl_check_access(int32_t opmask, struct l9p_acl_check_args *args)
 {

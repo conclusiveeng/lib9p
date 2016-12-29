@@ -247,7 +247,7 @@ l9p_socket_readmsg(struct l9p_socket_softc *sc, void **buf, size_t *size)
 
 	msize = le32toh(*(uint32_t *)buffer);
 	toread = msize - sizeof(uint32_t);
-	buffer = realloc(buffer, msize);
+	buffer = l9p_realloc(buffer, msize);
 
 	ret = xread(fd, (char *)buffer + sizeof(uint32_t), toread);
 	if (ret < 0) {

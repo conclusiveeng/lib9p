@@ -2411,7 +2411,7 @@ fs_fsync(void *softc __unused, struct l9p_request *req)
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
-	if (fsync(file->ff_fd))
+	if (fsync(file->ff_dir != NULL ? dirfd(file->ff_dir) : file->ff_fd))
 		error = errno;
 	return (error);
 }

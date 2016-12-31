@@ -1254,21 +1254,13 @@ l9p_dispatch_tfsync(struct l9p_request *req)
 	struct l9p_backend *be;
 	int error;
 
-	/*
-	 * Forbid dir?  Not clear what it means to fsync them.
-	 * Current backend code assumes open file (not dir),
-	 * so we'll forbid directories here for now.
-	 */
 	error = fid_lookup(conn, req->lr_req.hdr.fid, ENOENT,
-	    F_REQUIRE_OPEN | F_FORBID_DIR, &req->lr_fid);
+	    F_REQUIRE_OPEN, &req->lr_fid);
 	if (error)
 		return (error);
 
 	be = conn->lc_server->ls_backend;
 
-	/*
-	 * TODO: async fsync, maybe.
-	 */
 	error = be->fsync != NULL ? be->fsync(be->softc, req) : ENOSYS;
 	return (error);
 }

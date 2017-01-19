@@ -4,6 +4,7 @@ SRCS=		pack.c \
 		connection.c \
 		request.c log.c \
 		hashtable.c \
+		genacl.c \
 		utils.c \
 		rfuncs.c \
 		threadpool.c \

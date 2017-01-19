@@ -78,6 +78,7 @@
   #if __MAC_OS_X_VERSION_MIN_REQUIRED > 1090
     #define HAVE_FSTATAT
   #endif
+  #define ACL_TYPE_NFS4 ACL_TYPE_EXTENDED
 #endif
 
 struct fs_softc {
@@ -753,7 +754,6 @@ check_access(int32_t opmask,
     struct fs_authinfo *ai, gid_t egid)
 {
 	struct l9p_acl_check_args args;
-	int i, mask, error;
 
 	/*
 	 * If we have ACLs, use them exclusively, ignoring Unix
@@ -763,7 +763,7 @@ check_access(int32_t opmask,
 	args.aca_uid = ai->ai_uid;
 	args.aca_gid = egid;
 	args.aca_groups = ai->ai_gids;
-	args.aca_ngroups = ai->ai_ngids;
+	args.aca_ngroups = (size_t)ai->ai_ngids;
 	args.aca_parent = pacl;
 	args.aca_pstat = pst;
 	args.aca_child = cacl;
@@ -1096,7 +1096,7 @@ fs_icreate(void *softc, struct l9p_fid *dir, char *name, int flags,
  */
 static int
 fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
-    gid_t egid, struct stat *st)
+    gid_t egid __unused, struct stat *st)
 {
 	struct fs_softc *sc = softc;
 	struct fs_fid *file;
@@ -2625,7 +2625,7 @@ fs_getlock(void *softc __unused, struct l9p_request *req)
 }
 
 static int
-fs_link(void *softc, struct l9p_request *req)
+fs_link(void *softc __unused, struct l9p_request *req)
 {
 	struct l9p_fid *dir;
 	struct fs_fid *file;

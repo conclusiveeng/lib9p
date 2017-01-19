@@ -40,13 +40,15 @@
 
 typedef int econvertfn(acl_entry_t, struct l9p_ace *);
 
+#ifdef notyet
 static struct l9p_acl *l9p_new_acl(uint32_t acetype, uint32_t aceasize);
 static struct l9p_acl *l9p_growacl(struct l9p_acl *acl, uint32_t aceasize);
+static int l9p_count_aces(acl_t sysacl);
+static struct l9p_acl *l9p_sysacl_to_acl(int, acl_t, econvertfn *);
+#endif
 static bool l9p_ingroup(gid_t tid, gid_t gid, gid_t *gids, size_t ngids);
 static int l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
     uid_t uid, gid_t gid, gid_t *gids, size_t ngids);
-static int l9p_count_aces(acl_t sysacl);
-static struct l9p_acl *l9p_sysacl_to_acl(int, acl_t, econvertfn *);
 
 void
 l9p_acl_free(struct l9p_acl *acl)
@@ -164,7 +166,7 @@ l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
 		allowdeny = ace->ace_type == L9P_ACET_ACCESS_DENIED ?
 		    "deny" : "allow";
 #endif
-		if (match && (ace->ace_mask & mask) != 0) {
+		if (match && (ace->ace_mask & (uint32_t)mask) != 0) {
 #ifdef ACE_DEBUG
 			if (show_tid)
 				L9P_LOG(L9P_DEBUG,
@@ -425,7 +427,6 @@ int
 l9p_ace_mask_to_rwx(int32_t opmask)
 {
 	int rwx = 0;
-	uint32_t rmask;
 
 	if (opmask &
 	    (L9P_ACE_READ_DATA | L9P_ACE_READ_NAMED_ATTRS |
@@ -443,6 +444,7 @@ l9p_ace_mask_to_rwx(int32_t opmask)
 	return (rwx);
 }
 
+#ifdef notyet
 /*
  * Allocate new ACL holder and ACEs.
  */
@@ -504,7 +506,8 @@ l9p_count_aces(acl_t sysacl)
 	id = ACL_FIRST_ENTRY;
 	for (n = 0; acl_get_entry(sysacl, id, &entry) == 1; n++)
 		id = ACL_NEXT_ENTRY;
-	return (n);
+
+	return ((int)n);
 }
 
 /*
@@ -519,7 +522,7 @@ l9p_sysacl_to_acl(int acetype, acl_t sysacl, econvertfn *convert)
 	uint32_t n;
 	int error, id;
 
-	acl = l9p_new_acl(acetype, l9p_count_aces(sysacl));
+	acl = l9p_new_acl((uint32_t)acetype, (uint32_t)l9p_count_aces(sysacl));
 	if (acl == NULL)
 		return (NULL);
 	id = ACL_FIRST_ENTRY;
@@ -537,6 +540,7 @@ l9p_sysacl_to_acl(int acetype, acl_t sysacl, econvertfn *convert)
 	acl->acl_nace = n;
 	return (acl);
 }
+#endif
 
 #if defined(HAVE_POSIX_ACLS) && 0 /* not yet */
 struct l9p_acl *

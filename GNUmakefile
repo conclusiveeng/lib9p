@@ -36,6 +36,7 @@ LIB_SRCS := \
 	pack.c \
 	connection.c \
 	request.c \
+	genacl.c \
 	log.c \
 	hashtable.c \
 	utils.c \

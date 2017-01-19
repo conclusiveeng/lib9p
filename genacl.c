@@ -40,7 +40,7 @@
 
 typedef int econvertfn(acl_entry_t, struct l9p_ace *);
 
-#ifdef notyet
+#ifndef __APPLE__
 static struct l9p_acl *l9p_new_acl(uint32_t acetype, uint32_t aceasize);
 static struct l9p_acl *l9p_growacl(struct l9p_acl *acl, uint32_t aceasize);
 static int l9p_count_aces(acl_t sysacl);
@@ -444,7 +444,7 @@ l9p_ace_mask_to_rwx(int32_t opmask)
 	return (rwx);
 }
 
-#ifdef notyet
+#ifndef __APPLE__
 /*
  * Allocate new ACL holder and ACEs.
  */

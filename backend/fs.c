@@ -53,6 +53,7 @@
 #include "../fid.h"
 #include "../log.h"
 #include "../rfuncs.h"
+#include "../genacl.h"
 #include "backend.h"
 #include "fs.h"
 
@@ -77,6 +78,7 @@
   #if __MAC_OS_X_VERSION_MIN_REQUIRED > 1090
     #define HAVE_FSTATAT
   #endif
+  #define ACL_TYPE_NFS4 ACL_TYPE_EXTENDED
 #endif
 
 struct fs_softc {
@@ -90,7 +92,12 @@ struct fs_fid {
 	char	*ff_name;
 	struct fs_authinfo *ff_ai;
 	pthread_mutex_t ff_mtx;
+	int	ff_flags;
+	struct l9p_acl *ff_acl; /* cached ACL if any */
 };
+
+#define	FF_NO_NFSV4_ACL	0x01	/* don't go looking for NFSv4 ACLs */
+/*	FF_NO_POSIX_ACL	0x02	-- not yet */
 
 /*
  * Our authinfo consists of:
@@ -114,9 +121,12 @@ struct fs_fid {
  *
  * The refcount is simply the number of "openfile"s using this
  * authinfo (so that when the last ref goes away, we can free it).
+ *
+ * There are also master ACL flags (same as in ff_flags).
  */
 struct fs_authinfo {
 	uint32_t ai_refcnt;
+	int	ai_flags;
 	uid_t	ai_uid;
 	int	ai_ngids;
 	gid_t	ai_gids[];	/* NB: flexible array member */
@@ -126,19 +136,23 @@ struct fs_authinfo {
  * Internal functions (except inline functions).
  */
 static int fs_buildname(struct l9p_fid *, char *, char *, size_t);
+static int fs_pdir(struct fs_softc *, struct l9p_fid *, char *, size_t,
+    struct stat *st);
 static int fs_dpf(char *, char *, size_t);
 static int fs_oflags_dotu(int, int *);
 static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
-static int fs_nde(struct fs_softc *, struct l9p_fid *, gid_t,
+static int fs_nde(struct fs_softc *, struct l9p_fid *, bool, gid_t,
     struct stat *, uid_t *, gid_t *);
-static int fs_rde(struct fs_softc *, struct l9p_fid *, struct stat *);
-static int fs_rdf(struct fs_softc *, struct l9p_fid *,
-    char *, size_t, struct stat *);
 static struct fs_fid *open_fid(const char *, struct fs_authinfo *);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
-static bool check_access(struct stat *, struct fs_authinfo *, gid_t,
-    enum l9p_omode);
+static void fillacl(struct fs_fid *ff);
+static struct l9p_acl *getacl(struct fs_fid *ff, int fd, const char *path);
+static void dropacl(struct fs_fid *ff);
+static struct l9p_acl *look_for_nfsv4_acl(int fd, const char *path);
+static int check_access(int32_t,
+    struct l9p_acl *, struct stat *, struct l9p_acl *, struct stat *,
+    struct fs_authinfo *, gid_t);
 static void generate_qid(struct stat *, struct l9p_qid *);
 
 static int fs_icreate(void *, struct l9p_fid *, char *, int,
@@ -397,6 +411,33 @@ fs_buildname(struct l9p_fid *dir, char *name, char *buf, size_t size)
 }
 
 /*
+ * Build parent name of file by splitting it off.  Return an error
+ * if the given fid represents the root, so that there is no such
+ * parent, or if the discovered parent is not a directory.
+ */
+static int
+fs_pdir(struct fs_softc *sc, struct l9p_fid *fid, char *buf, size_t size,
+    struct stat *st)
+{
+	struct fs_fid *ff;
+	char *path;
+
+	ff = fid->lo_aux;
+	assert(ff != NULL);
+	path = ff->ff_name;
+	if (strcmp(path, sc->fs_rootpath) == 0)
+		return (EINVAL);
+	path = r_dirname(path, buf, size);
+	if (path == NULL)
+		return (ENAMETOOLONG);
+	if (lstat(path, st) != 0)
+		return (errno);
+	if (!S_ISDIR(st->st_mode))
+		return (ENOTDIR);
+	return (0);
+}
+
+/*
  * Like fs_buildname() but for adding a file name to a buffer
  * already holding a directory name.  Essentially does
  *     strcat(dbuf, "/");
@@ -426,7 +467,7 @@ fs_dpf(char *dbuf, char *fname, size_t size)
  * effective gid <egid>.
  *
  * The new entity should be owned by user/group <*nuid, *ngid>,
- * if it's really a new entity.
+ * if it's really a new entity.  It will be a directory if isdir.
  *
  * Returns an error number if the entry should not be created
  * (e.g., read-only file system or no permission to write in
@@ -435,11 +476,13 @@ fs_dpf(char *dbuf, char *fname, size_t size)
  * use the parent directory's IDs.  Fills in <*st> on success.
  */
 static int
-fs_nde(struct fs_softc *sc, struct l9p_fid *dir, gid_t egid,
+fs_nde(struct fs_softc *sc, struct l9p_fid *dir, bool isdir, gid_t egid,
     struct stat *st, uid_t *nuid, gid_t *ngid)
 {
 	struct fs_fid *dirf;
 	struct fs_authinfo *ai;
+	int32_t op;
+	int error;
 
 	if (sc->fs_readonly)
 		return (EROFS);
@@ -451,90 +494,15 @@ fs_nde(struct fs_softc *sc, struct l9p_fid *dir, gid_t egid,
 		return (ENOTDIR);
 	dirf = dir->lo_aux;
 	ai = dirf->ff_ai;
-	if (!check_access(st, ai, egid, L9P_OWRITE))
+	fillacl(dirf);
+	op = isdir ? L9P_ACE_ADD_SUBDIRECTORY : L9P_ACE_ADD_FILE;
+	error = check_access(op, dirf->ff_acl, st, NULL, NULL, ai, egid);
+	if (error)
 		return (EPERM);
 
 	*nuid = ai->ai_uid != (uid_t)-1 ? ai->ai_uid : st->st_uid;
 	*ngid = egid != (gid_t)-1 ? egid :
 	    ai->ai_ngids > 0 ?  ai->ai_gids[0] : st->st_gid;
-	return (0);
-}
-
-/*
- * Check for permission to remove or rename a directory entry.
- * (In other words, check for write permission on the directory.)
- *
- * For full two-fid rename requests, we effectively remove from one
- * directory and add to another.  Used twice, this function suffices
- * for both directories.
- *
- * This function also works for making links, where we will make
- * a new directory entry (rather than renaming one) but are not
- * actually making a new inode and hence do not need uid+gid.
- */
-static int
-fs_rde(struct fs_softc *sc, struct l9p_fid *dir, struct stat *st)
-{
-	struct fs_fid *ff;
-	struct fs_authinfo *ai;
-
-	if (sc->fs_readonly)
-		return (EROFS);
-
-	ff = dir->lo_aux;
-	assert(ff != NULL);
-
-	if (lstat(ff->ff_name, st) != 0)
-		return (errno);
-
-	if (!S_ISDIR(st->st_mode))
-		return (ENOTDIR);
-
-	ai = ff->ff_ai;
-	if (!check_access(st, ai, (gid_t)-1, L9P_OWRITE))
-		return (EPERM);
-
-	return (0);
-}
-
-/*
- * Much like fs_rde but for a file fid.  We need to find the file's
- * containing directory.
- *
- * The file itself might be the file system root, in which case it
- * effectively has no containing directory and cannot be removed or
- * renamed.
- */
-static int
-fs_rdf(struct fs_softc *sc, struct l9p_fid *file, char *pathbuf,
-    size_t bufsize, struct stat *st)
-{
-	struct fs_fid *ff;
-	struct fs_authinfo *ai;
-	char *path;
-
-	if (sc->fs_readonly)
-		return (EROFS);
-
-	ff = file->lo_aux;
-	assert(ff != NULL);
-	path = ff->ff_name;
-	if (strcmp(path, sc->fs_rootpath) == 0)
-		return (EINVAL);
-	path = r_dirname(path, pathbuf, bufsize);
-	if (path == NULL)
-		return (ENAMETOOLONG);
-
-	if (lstat(path, st) != 0)
-		return (errno);
-
-	if (!S_ISDIR(st->st_mode))
-		return (ENOTDIR);
-
-	ai = ff->ff_ai;
-	if (!check_access(st, ai, (gid_t)-1, L9P_OWRITE))
-		return (EPERM);
-
 	return (0);
 }
 
@@ -680,87 +648,134 @@ generate_qid(struct stat *buf, struct l9p_qid *qid)
 }
 
 /*
+ * Fill in ff->ff_acl if it's not set yet.  Skip if the "don't use
+ * ACLs" flag is set, and use the flag to remember failure so
+ * we don't bother retrying either.
+ */
+static void
+fillacl(struct fs_fid *ff)
+{
+
+	if (ff->ff_acl == NULL && (ff->ff_flags & FF_NO_NFSV4_ACL) == 0) {
+		ff->ff_acl = look_for_nfsv4_acl(ff->ff_fd, ff->ff_name);
+		if (ff->ff_acl == NULL)
+			ff->ff_flags |= FF_NO_NFSV4_ACL;
+	}
+}
+
+/*
+ * Get an ACL given fd and/or path name.  We check for the "don't get
+ * ACL" flag in the given ff_fid data structure first, but don't set
+ * the flag here.  The fillacl() code is similar but will set the
+ * flag; it also uses the ff_fd and ff_name directly.
+ *
+ * (This is used to get ACLs for parent directories, for instance.)
+ */
+static struct l9p_acl *
+getacl(struct fs_fid *ff, int fd, const char *path)
+{
+
+	if (ff->ff_flags & FF_NO_NFSV4_ACL)
+		return (NULL);
+	return look_for_nfsv4_acl(fd, path);
+}
+
+/*
+ * Drop cached ff->ff_acl, e.g., after moving from one directory to
+ * another, where inherited ACLs might change.
+ */
+static void
+dropacl(struct fs_fid *ff)
+{
+
+	l9p_acl_free(ff->ff_acl);
+	ff->ff_acl = NULL;
+	ff->ff_flags = ff->ff_ai->ai_flags;
+}
+
+/*
+ * Check to see if we can find NFSv4 ACLs for the given file.
+ * If we have an open fd, we can use that, otherwise we need
+ * to use the path.
+ */
+static struct l9p_acl *
+look_for_nfsv4_acl(int fd, const char *path)
+{
+	struct l9p_acl *acl;
+	acl_t sysacl;
+
+	if (fd >= 0)
+		sysacl = acl_get_fd_np(fd, ACL_TYPE_NFS4);
+	else
+		sysacl = acl_get_link_np(path, ACL_TYPE_NFS4);
+	if (sysacl == NULL) {
+		/*
+		 * EINVAL means no NFSv4 ACLs apply for this file.
+		 * Other error numbers indicate some kind of problem.
+		 */
+		if (errno != EINVAL) {
+			if (fd >= 0)
+				L9P_LOG(L9P_ERROR,
+				    "error retrieving NFSv4 ACL from "
+				    "fdesc %d (%s): %s", fd,
+				    path, strerror(errno));
+			else
+				L9P_LOG(L9P_ERROR,
+				    "error retrieving NFSv4 ACL from %s: %s",
+				    path, strerror(errno));
+		}
+		return (NULL);
+	}
+#if defined(HAVE_FREEBSD_ACLS)
+	acl = l9p_freebsd_nfsv4acl_to_acl(sysacl);
+#else
+	acl = NULL; /* XXX need a l9p_darwin_acl_to_acl */
+#endif
+	acl_free(sysacl);
+	return (acl);
+}
+
+/*
  * Verify that the user whose authinfo is in <ai> and effective
  * group ID is <egid> ((gid_t)-1 means no egid supplied) has
- * permission to do something to a file, based on stat st_mode
- * data and 9p-style requested open-mode (omode).
+ * permission to do something.
+ *
+ * The "something" may be rather complex: we allow NFSv4 style
+ * operation masks here, and provide parent and child ACLs and
+ * stat data.  At most one of pacl+pst and cacl+cst can be NULL,
+ * unless ACLs are not supported; then pacl and cacl can both
+ * be NULL but pst or cst must be non-NULL depending on the
+ * operation.
  */
-static bool
-check_access(struct stat *st, struct fs_authinfo *ai, gid_t egid,
-    enum l9p_omode omode)
+static int
+check_access(int32_t opmask,
+    struct l9p_acl *pacl, struct stat *pst,
+    struct l9p_acl *cacl, struct stat *cst,
+    struct fs_authinfo *ai, gid_t egid)
 {
-	int i, mask;
-
-	if (ai->ai_uid == 0)
-		return (true);
+	struct l9p_acl_check_args args;
 
 	/*
-	 * This is a bit dirty (using the well known mode bits instead
-	 * of the S_I[RWX]{USR,GRP,OTH} macros), but lets us be very
-	 * efficient about it.
-	 *
-	 * Note that L9P_OTRUNC requires write access to the file.
-	 * (L9P_ORCLOSE requires write access to the parent directory,
-	 * but the caller must do that check.)
+	 * If we have ACLs, use them exclusively, ignoring Unix
+	 * permissions.  Otherwise, fall back on stat st_mode
+	 * bits, and allow super-user as well.
 	 */
-	switch (omode & L9P_OACCMODE) {
-	case L9P_ORDWR:
-		mask = 0600;
-		break;
-	case L9P_OREAD:
-	default:
-		mask = 0400;
-		break;
-	case L9P_OWRITE:
-		mask = 0200;
-		break;
-	case L9P_OEXEC:
-		mask = 0100;
-		break;
+	args.aca_uid = ai->ai_uid;
+	args.aca_gid = egid;
+	args.aca_groups = ai->ai_gids;
+	args.aca_ngroups = (size_t)ai->ai_ngids;
+	args.aca_parent = pacl;
+	args.aca_pstat = pst;
+	args.aca_child = cacl;
+	args.aca_cstat = cst;
+	if (pacl == NULL && cacl == NULL) {
+		args.aca_aclmode = L9P_ACM_STAT_MODE;
+		args.aca_superuser = true;
+	} else {
+		args.aca_aclmode = L9P_ACM_NFS_ACL | L9P_ACM_ZFS_ACL;
+		args.aca_superuser = false;
 	}
-	if (omode & L9P_OTRUNC)
-		mask |= 0400;
-
-	/*
-	 * Normal Unix semantics are: apply user permissions first
-	 * and if these fail, reject the request entirely.  Current
-	 * lib9p semantics go on to allow group or other as well.
-	 *
-	 * Also, we check "other" before "group" because group check
-	 * is more expensive.
-	 */
-	if (st->st_uid == ai->ai_uid) {
-		if ((st->st_mode & mask) == mask)
-			return (true);
-	}
-
-	/* Check for "other" access */
-	mask >>= 6;
-	if ((st->st_mode & mask) == mask)
-		return (true);
-
-	/*
-	 * Check for group access.  If we don't have it we're done,
-	 * if we do have it, see if we're listed in the group,
-	 * including the extra gid if any.
-	 *
-	 * If the passed-in egid is (gid_t)-1 it should not
-	 * match st->st_gid, which should never be (gid_t)-1,
-	 * so we should not need any special test here.
-	 * (We use this with ai->ai_uid as well, if the attach
-	 * was done with NONUNAME and no valid user name.)
-	 */
-	mask <<= 3;
-	if ((st->st_mode & mask) == 0)
-		return (false);
-
-	if (st->st_gid == egid)
-		return (true);
-	for (i = 0; i < ai->ai_ngids; i++)
-		if (st->st_gid == ai->ai_gids[i])
-			return (true);
-
-	return (false);
+	return (l9p_acl_check_access(opmask, &args));
 }
 
 static int
@@ -831,6 +846,7 @@ fs_attach(void *softc, struct l9p_request *req)
 	}
 	ai->ai_refcnt = 0;
 	ai->ai_uid = pwd != NULL ? pwd->pw_uid : uid;
+	ai->ai_flags = 0;	/* XXX for now */
 	memcpy(ai->ai_gids, gids, (size_t)ngroups * sizeof(gid_t));
 	free(gids);
 
@@ -1016,7 +1032,7 @@ fs_icreate(void *softc, struct l9p_fid *dir, char *name, int flags,
 		return (ENOMEM);
 
 	/* Check create permission and compute new file ownership. */
-	error = fs_nde(softc, dir, egid, st, &uid, &gid);
+	error = fs_nde(softc, dir, false, egid, st, &uid, &gid);
 	if (error) {
 		free(name);
 		return (error);
@@ -1080,12 +1096,14 @@ fs_icreate(void *softc, struct l9p_fid *dir, char *name, int flags,
  */
 static int
 fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
-    gid_t egid, struct stat *st)
+    gid_t egid __unused, struct stat *st)
 {
 	struct fs_softc *sc = softc;
 	struct fs_fid *file;
 	struct stat first;
+	int32_t op;
 	char *name;
+	int error;
 	int fd;
 	DIR *dirp;
 
@@ -1107,8 +1125,26 @@ fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
 		return (errno);
 	if (S_ISLNK(first.st_mode))
 		return (EPERM);
-	if (!check_access(&first, file->ff_ai, egid, p9))
-		return (EPERM);
+
+	/* Can we rely on O_APPEND here?  Best not, can be cleared. */
+	switch (flags & O_ACCMODE) {
+	case O_RDONLY:
+		op = L9P_ACE_READ_DATA;
+		break;
+	case O_WRONLY:
+		op = L9P_ACE_WRITE_DATA;
+		break;
+	case O_RDWR:
+		op = L9P_ACE_READ_DATA | L9P_ACE_WRITE_DATA;
+		break;
+	default:
+		return (EINVAL);
+	}
+	fillacl(file);
+	error = check_access(op, NULL, NULL, file->ff_acl, &first,
+	    file->ff_ai, (gid_t)-1);
+	if (error)
+		return (error);
 
 	if (S_ISDIR(first.st_mode)) {
 		/* Forbid write or truncate on directory. */
@@ -1169,7 +1205,7 @@ fs_imkdir(void *softc, struct l9p_fid *dir, char *name,
 	if (error)
 		return (error);
 
-	error = fs_nde(softc, dir, egid, st, &uid, &gid);
+	error = fs_nde(softc, dir, true, egid, st, &uid, &gid);
 	if (error)
 		return (error);
 
@@ -1212,7 +1248,7 @@ fs_imknod(void *softc, struct l9p_fid *dir, char *name,
 	if (error)
 		return (error);
 
-	error = fs_nde(softc, dir, egid, st, &uid, &gid);
+	error = fs_nde(softc, dir, false, egid, st, &uid, &gid);
 	if (error)
 		return (error);
 
@@ -1255,7 +1291,7 @@ fs_imkfifo(void *softc, struct l9p_fid *dir, char *name,
 	if (error)
 		return (error);
 
-	error = fs_nde(softc, dir, egid, st, &uid, &gid);
+	error = fs_nde(softc, dir, false, egid, st, &uid, &gid);
 	if (error)
 		return (error);
 
@@ -1299,7 +1335,7 @@ fs_imksocket(void *softc, struct l9p_fid *dir, char *name,
 	if (error)
 		return (error);
 
-	error = fs_nde(softc, dir, egid, st, &uid, &gid);
+	error = fs_nde(softc, dir, false, egid, st, &uid, &gid);
 	if (error)
 		return (error);
 
@@ -1406,7 +1442,7 @@ fs_isymlink(void *softc, struct l9p_fid *dir, char *name,
 	if (error)
 		return (error);
 
-	error = fs_nde(softc, dir, egid, st, &uid, &gid);
+	error = fs_nde(softc, dir, false, egid, st, &uid, &gid);
 	if (error)
 		return (error);
 
@@ -1548,19 +1584,40 @@ fs_read(void *softc __unused, struct l9p_request *req)
 static int
 fs_remove(void *softc, struct l9p_fid *fid)
 {
+	struct fs_softc *sc = softc;
+	struct l9p_acl *parent_acl;
 	struct fs_fid *file;
-	struct stat st;
-	char namebuf[MAXPATHLEN];
+	struct stat pst, cst;
+	char dirname[MAXPATHLEN];
 	int error;
 
-	error = fs_rdf(softc, fid, namebuf, sizeof(namebuf), &st);
+	if (sc->fs_readonly)
+		return (EROFS);
+
+	error = fs_pdir(sc, fid, dirname, sizeof(dirname), &pst);
 	if (error)
 		return (error);
 
 	file = fid->lo_aux;
-	/* saved stat data in "st" is for parent dir, hence useless here */
-	if (remove(file->ff_name) != 0)
-		error = errno;
+	if (lstat(file->ff_name, &cst) != 0)
+		return (error);
+
+	parent_acl = getacl(file, -1, dirname);
+	fillacl(file);
+
+	error = check_access(L9P_ACOP_UNLINK,
+	    parent_acl, &pst, file->ff_acl, &cst, file->ff_ai, (gid_t)-1);
+	l9p_acl_free(parent_acl);
+	if (error)
+		return (error);
+
+	if (S_ISDIR(cst.st_mode)) {
+		if (rmdir(file->ff_name) != 0)
+			error = errno;
+	} else {
+		if (unlink(file->ff_name) != 0)
+			error = errno;
+	}
 
 	return (error);
 }
@@ -1584,6 +1641,7 @@ fs_stat(void *softc __unused, struct l9p_request *req)
 static int
 fs_walk(void *softc, struct l9p_request *req)
 {
+	struct l9p_acl *acl;
 	struct fs_authinfo *ai;
 	struct fs_softc *sc = softc;
 	struct fs_fid *file = req->lr_fid->lo_aux;
@@ -1636,6 +1694,8 @@ fs_walk(void *softc, struct l9p_request *req)
 		return (errno);
 	ai = file->ff_ai;
 	atroot = strcmp(succ, sc->fs_rootpath) == 0;
+	fillacl(file);
+	acl = file->ff_acl;
 
 	nwname = (int)req->lr_req.twalk.nwname;
 
@@ -1651,7 +1711,9 @@ fs_walk(void *softc, struct l9p_request *req)
 			error = ENOTDIR;
 			goto out;
 		}
-		if (!check_access(&st, ai, (gid_t)-1, L9P_OEXEC)) {
+		error = check_access(L9P_ACE_EXECUTE,
+		     NULL, NULL, acl, &st, ai, (gid_t)-1);
+		if (error) {
 			L9P_LOG(L9P_DEBUG,
 			    "Twalk: denying dir-walk on \"%s\" for uid %u",
 			    succ, (unsigned)ai->ai_uid);
@@ -1725,12 +1787,15 @@ fs_walk(void *softc, struct l9p_request *req)
 
 		/*
 		 * Success: generate qid and swap this
-		 * successful name into place.
+		 * successful name into place.  Update acl.
 		 */
 		generate_qid(&st, &req->lr_resp.rwalk.wqid[i]);
 		swtmp = succ;
 		succ = next;
 		next = swtmp;
+		if (acl != NULL && acl != file->ff_acl)
+			l9p_acl_free(acl);
+		acl = getacl(file, -1, next);
 	}
 
 	/*
@@ -1753,13 +1818,22 @@ fs_walk(void *softc, struct l9p_request *req)
 		/*
 		 * Before overwriting fid->lo_aux, free the old value.
 		 * Note that this doesn't free the l9p_fid data,
-		 * just the fs_fid data.
+		 * just the fs_fid data.  (But it does ditch ff_acl.)
 		 */
+		if (acl == file->ff_acl)
+			acl = NULL;
 		fs_freefid(softc, req->lr_fid);
+		file = NULL;
 	}
 	req->lr_newfid->lo_aux = newfile;
+	if (file != NULL && acl != file->ff_acl) {
+		newfile->ff_acl = acl;
+		acl = NULL;
+	}
 	req->lr_resp.rwalk.nwqid = (uint16_t)i;
 out:
+	if (file != NULL && acl != file->ff_acl)
+		l9p_acl_free(acl);
 	return (error);
 }
 
@@ -1866,13 +1940,26 @@ fs_wstat(void *softc, struct l9p_request *req)
 	}
 
 	if (strlen(l9stat->name) > 0) {
+		struct l9p_acl *parent_acl;
 		struct stat st;
 		char *tmp;
 		char newname[MAXPATHLEN];
 
-		error = fs_rdf(sc, fid, newname, sizeof(newname), &st);
-		if (error == 0)
-			error = fs_dpf(newname, l9stat->name, sizeof(newname));
+		/*
+		 * Rename-within-directory: it's not deleting anything,
+		 * but we need write permission on the directory.  This
+		 * should suffice.
+		 */
+		error = fs_pdir(softc, fid, newname, sizeof(newname), &st);
+		if (error)
+			goto out;
+		parent_acl = getacl(file, -1, newname);
+		error = check_access(L9P_ACE_ADD_FILE,
+		    parent_acl, &st, NULL, NULL, file->ff_ai, (gid_t)-1);
+		l9p_acl_free(parent_acl);
+		if (error)
+			goto out;
+		error = fs_dpf(newname, l9stat->name, sizeof(newname));
 		if (error)
 			goto out;
 		tmp = strdup(newname);
@@ -1885,7 +1972,7 @@ fs_wstat(void *softc, struct l9p_request *req)
 			free(tmp);
 			goto out;
 		}
-		/* Successful rename, update file->ff_name. */
+		/* Successful rename, update file->ff_name.  ACL can stay. */
 		free(file->ff_name);
 		file->ff_name = tmp;
 	}
@@ -1900,6 +1987,7 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	struct stat st;
 	struct statfs f;
 	long name_max;
+	int error;
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
@@ -1907,8 +1995,15 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	if (lstat(file->ff_name, &st) != 0)
 		return (errno);
 
-	if (!check_access(&st, file->ff_ai, (gid_t)-1, L9P_OREAD))
-		return (EPERM);
+	/*
+	 * Not entirely clear what access to require; we'll go
+	 * for "read data".
+	 */
+	fillacl(file);
+	error = check_access(L9P_ACE_READ_DATA, NULL, NULL,
+	    file->ff_acl, &st, file->ff_ai, (gid_t)-1);
+	if (error)
+		return (error);
 
 	if (statfs(file->ff_name, &f) != 0)
 		return (errno);
@@ -2040,37 +2135,75 @@ fs_mknod(void *softc, struct l9p_request *req)
 static int
 fs_rename(void *softc, struct l9p_request *req)
 {
+	struct fs_softc *sc = softc;
+	struct fs_authinfo *ai;
+	struct l9p_acl *oparent_acl;
 	struct l9p_fid *fid, *f2;
 	struct fs_fid *file, *f2ff;
-	struct stat st;
+	struct stat cst, opst, npst;
+	int32_t op;
+	bool reparenting;
 	char *tmp;
 	char olddir[MAXPATHLEN], newname[MAXPATHLEN];
 	int error;
+
+	if (sc->fs_readonly)
+		return (EROFS);
 
 	/*
 	 * Note: lr_fid represents the file that is to be renamed,
 	 * so we must locate its parent directory and verify that
 	 * both this parent directory and the new directory f2 are
-	 * writable.
+	 * writable.  But if the new parent directory is the same
+	 * path as the old parent directory, our job is simpler.
 	 */
 	fid = req->lr_fid;
+	file = fid->lo_aux;
+	assert(file != NULL);
+	ai = file->ff_ai;
+
+	error = fs_pdir(sc, fid, olddir, sizeof(olddir), &opst);
+	if (error)
+		return (error);
+
 	f2 = req->lr_fid2;
 	f2ff = f2->lo_aux;
 	assert(f2ff != NULL);
 
-	error = fs_rdf(softc, fid, olddir, sizeof(olddir), &st);
-	if (error)
-		return (error);
+	reparenting = strcmp(olddir, f2ff->ff_name) != 0;
+
+	fillacl(file);
+	fillacl(f2ff);
+
+	if (lstat(file->ff_name, &cst) != 0)
+		return (errno);
 
 	/*
-	 * Only need to check f2 if it's not the same path as the
-	 * directory we already discovered.
+	 * Are we moving from olddir?  If so, we're unlinking
+	 * from it, in terms of ACL access.
 	 */
-	if (strcmp(olddir, f2ff->ff_name) != 0) {
-		error = fs_rde(softc, f2, &st);
+	if (reparenting) {
+		oparent_acl = getacl(file, -1, olddir);
+		error = check_access(L9P_ACOP_UNLINK,
+		    oparent_acl, &opst, file->ff_acl, &cst, ai, (gid_t)-1);
+		l9p_acl_free(oparent_acl);
 		if (error)
 			return (error);
 	}
+
+	/*
+	 * Now check that we're allowed to "create" a file or directory in
+	 * f2.  (Should we do this, too, only if reparenting?  Maybe check
+	 * for dir write permission if not reparenting -- but that's just
+	 * add-file/add-subdir, which means doing this always.)
+	 */
+	if (lstat(f2ff->ff_name, &npst) != 0)
+		return (errno);
+	op = S_ISDIR(cst.st_mode) ? L9P_ACE_ADD_SUBDIRECTORY : L9P_ACE_ADD_FILE;
+	error = check_access(op, f2ff->ff_acl, &npst, NULL, NULL,
+	    ai, (gid_t)-1);
+	if (error)
+		return (error);
 
 	/*
 	 * Directories OK, file systems not R/O, etc; build final name.
@@ -2086,15 +2219,17 @@ fs_rename(void *softc, struct l9p_request *req)
 	if (tmp == NULL)
 		return (ENOMEM);
 
-	file = fid->lo_aux;
 	if (rename(file->ff_name, tmp) != 0) {
 		error = errno;
 		free(tmp);
 		return (error);
 	}
+
 	/* file has been renamed but old fid is not clunked */
 	free(file->ff_name);
 	file->ff_name = tmp;
+
+	dropacl(file);
 	return (0);
 }
 
@@ -2490,34 +2625,46 @@ fs_getlock(void *softc __unused, struct l9p_request *req)
 }
 
 static int
-fs_link(void *softc, struct l9p_request *req)
+fs_link(void *softc __unused, struct l9p_request *req)
 {
 	struct l9p_fid *dir;
 	struct fs_fid *file;
 	struct fs_fid *dirf;
-	struct stat st;
+	struct stat fst, tdst;
+	int32_t op;
 	char *name;
 	char newname[MAXPATHLEN];
 	int error;
 
 	/* N.B.: lr_fid is the file to link, lr_fid2 is the target dir */
 	dir = req->lr_fid2;
+	dirf = dir->lo_aux;
+	assert(dirf != NULL);
+
 	name = req->lr_req.tlink.name;
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
 
-	/* Require write access to target directory. */
-	error = fs_rde(softc, dir, &st);
+	file = req->lr_fid->lo_aux;
+	assert(file != NULL);
+
+	if (lstat(dirf->ff_name, &tdst) != 0 ||
+	    lstat(file->ff_name, &fst) != 0)
+		return (errno);
+	if (S_ISDIR(fst.st_mode))
+		return (EISDIR);
+	fillacl(dirf);
+	op = S_ISDIR(fst.st_mode) ? L9P_ACE_ADD_SUBDIRECTORY : L9P_ACE_ADD_FILE;
+	error = check_access(op,
+	    dirf->ff_acl, &tdst, NULL, NULL, file->ff_ai, (gid_t)-1);
 	if (error)
 		return (error);
 
-	dirf = dir->lo_aux;
-
-	file = req->lr_fid->lo_aux;
-	assert(file != NULL);
 	if (link(file->ff_name, newname) != 0)
 		error = errno;
+	else
+		dropacl(file);
 	return (error);
 }
 
@@ -2545,48 +2692,67 @@ fs_mkdir(void *softc, struct l9p_request *req)
 static int
 fs_renameat(void *softc, struct l9p_request *req)
 {
+	struct fs_softc *sc = softc;
 	struct l9p_fid *olddir, *newdir;
-	struct stat st;
+	struct l9p_acl *facl;
+	struct fs_fid *off, *nff;
+	struct stat odst, ndst, fst;
+	int32_t op;
+	bool reparenting;
 	char *onp, *nnp;
 	char onb[MAXPATHLEN], nnb[MAXPATHLEN];
 	int error;
 
+	if (sc->fs_readonly)
+		return (EROFS);
+
 	olddir = req->lr_fid;
 	newdir = req->lr_fid2;
 	assert(olddir != NULL && newdir != NULL);
-
-	error = fs_rde(softc, olddir, &st);
-	if (error)
-		return (error);
-
-	if (olddir != newdir) {
-		/*
-		 * The dir fids may differ but have the same path.
-		 * Is this strcmp worth doing?
-		 *
-		 * struct ff_fid *off, *nff;
-		 * off = olddir->lo_aux;
-		 * nff = newdir->lo_aux;
-		 * assert(nff != NULL);
-		 * if (strcmp(off->ff_name, nff->ff_name) != 0) {
-		 *     error = fs_rde(...);
-		 *     ...
-		 * }
-		 */
-		error = fs_rde(softc, newdir, &st);
-		if (error)
-			return (error);
-	}
+	off = olddir->lo_aux;
+	nff = newdir->lo_aux;
+	assert(off != NULL && nff != NULL);
 
 	onp = req->lr_req.trenameat.oldname;
 	nnp = req->lr_req.trenameat.newname;
-
 	error = fs_buildname(olddir, onp, onb, sizeof(onb));
 	if (error)
 		return (error);
 	error = fs_buildname(newdir, nnp, nnb, sizeof(nnb));
 	if (error)
 		return (error);
+	if (lstat(onb, &fst) != 0)
+		return (errno);
+
+	reparenting = olddir != newdir &&
+	    strcmp(off->ff_name, nff->ff_name) != 0;
+
+	if (lstat(off->ff_name, &odst) != 0)
+		return (errno);
+	if (!S_ISDIR(odst.st_mode))
+		return (ENOTDIR);
+	fillacl(off);
+
+	if (reparenting) {
+		if (lstat(nff->ff_name, &ndst) != 0)
+			return (errno);
+		if (!S_ISDIR(ndst.st_mode))
+			return (ENOTDIR);
+		facl = getacl(off, -1, onb);
+		fillacl(nff);
+
+		error = check_access(L9P_ACOP_UNLINK,
+		    off->ff_acl, &odst, facl, &fst, off->ff_ai, (gid_t)-1);
+		l9p_acl_free(facl);
+		if (error)
+			return (error);
+		op = S_ISDIR(fst.st_mode) ? L9P_ACE_ADD_SUBDIRECTORY :
+		    L9P_ACE_ADD_FILE;
+		error = check_access(op,
+		    nff->ff_acl, &ndst, NULL, NULL, nff->ff_ai, (gid_t)-1);
+		if (error)
+			return (error);
+	}
 
 	if (rename(onb, nnb))
 		error = errno;
@@ -2601,20 +2767,33 @@ fs_renameat(void *softc, struct l9p_request *req)
 static int
 fs_unlinkat(void *softc, struct l9p_request *req)
 {
+	struct fs_softc *sc = softc;
+	struct l9p_acl *facl;
 	struct l9p_fid *dir;
-	struct stat st;
+	struct fs_fid *dirff;
+	struct stat dirst, fst;
 	char *name;
 	char newname[MAXPATHLEN];
 	int error;
 
+	if (sc->fs_readonly)
+		return (EROFS);
+
 	dir = req->lr_fid;
+	dirff = dir->lo_aux;
+	assert(dirff != NULL);
 	name = req->lr_req.tunlinkat.name;
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
-
-	/* Require write access to directory. */
-	error = fs_rde(softc, dir, &st);
+	if (lstat(newname, &fst) != 0 ||
+	    lstat(dirff->ff_name, &dirst) != 0)
+		return (errno);
+	fillacl(dirff);
+	facl = getacl(dirff, -1, newname);
+	error = check_access(L9P_ACOP_UNLINK,
+	    dirff->ff_acl, &dirst, facl, &fst, dirff->ff_ai, (gid_t)-1);
+	l9p_acl_free(facl);
 	if (error)
 		return (error);
 
@@ -2648,6 +2827,7 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 	pthread_mutex_destroy(&f->ff_mtx);
 	free(f->ff_name);
 	ai = f->ff_ai;
+	l9p_acl_free(f->ff_acl);
 	free(f);
 	if (--ai->ai_refcnt == 0)
 		free(ai);

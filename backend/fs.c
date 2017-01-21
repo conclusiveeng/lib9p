@@ -847,6 +847,7 @@ fs_attach(void *softc, struct l9p_request *req)
 	ai->ai_refcnt = 0;
 	ai->ai_uid = pwd != NULL ? pwd->pw_uid : uid;
 	ai->ai_flags = 0;	/* XXX for now */
+	ai->ai_ngids = ngroups;
 	memcpy(ai->ai_gids, gids, (size_t)ngroups * sizeof(gid_t));
 	free(gids);
 

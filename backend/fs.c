@@ -89,10 +89,10 @@ struct fs_softc {
 struct fs_fid {
 	DIR	*ff_dir;
 	int	ff_fd;
+	int	ff_flags;
 	char	*ff_name;
 	struct fs_authinfo *ff_ai;
 	pthread_mutex_t ff_mtx;
-	int	ff_flags;
 	struct l9p_acl *ff_acl; /* cached ACL if any */
 };
 
@@ -108,6 +108,10 @@ struct fs_fid {
  *
  * The "default" gid is the first gid in the git-set, provided the
  * set size is at least 1.  The set-size may be zero, though.
+ *
+ * Adjustments to the ref-count must be atomic, once it's shared.
+ * It would be nice to use C11 atomics here but they are not common
+ * enough to all systems just yet; for now, we use a mutex.
  *
  * Note that some ops (Linux style ones) pass an effective gid for
  * the op, in which case, that gid may override.  To achieve this
@@ -125,6 +129,7 @@ struct fs_fid {
  * There are also master ACL flags (same as in ff_flags).
  */
 struct fs_authinfo {
+	pthread_mutex_t ai_mtx;	/* lock for refcnt */
 	uint32_t ai_refcnt;
 	int	ai_flags;
 	uid_t	ai_uid;
@@ -143,7 +148,7 @@ static int fs_oflags_dotu(int, int *);
 static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
 static int fs_nde(struct fs_softc *, struct l9p_fid *, bool, gid_t,
     struct stat *, uid_t *, gid_t *);
-static struct fs_fid *open_fid(const char *, struct fs_authinfo *);
+static struct fs_fid *open_fid(const char *, struct fs_authinfo *, bool);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
 static void fillacl(struct fs_fid *ff);
@@ -513,9 +518,10 @@ fs_nde(struct fs_softc *sc, struct l9p_fid *dir, bool isdir, gid_t egid,
  * we gain a reference.
  */
 static struct fs_fid *
-open_fid(const char *path, struct fs_authinfo *ai)
+open_fid(const char *path, struct fs_authinfo *ai, bool creating)
 {
 	struct fs_fid *ret;
+	uint32_t newcount;
 	int error;
 
 	ret = l9p_calloc(1, sizeof(*ret));
@@ -531,9 +537,19 @@ open_fid(const char *path, struct fs_authinfo *ai)
 		free(ret);
 		return (NULL);
 	}
-	ai->ai_refcnt++;
-	L9P_LOG(L9P_DEBUG, "open_fid: authinfo %p now used by %d",
-	    (void *)ai, ai->ai_refcnt);
+	pthread_mutex_lock(&ai->ai_mtx);
+	newcount = ++ai->ai_refcnt;
+	pthread_mutex_unlock(&ai->ai_mtx);
+	/*
+	 * If we just incremented the count to 1, we're the *first*
+	 * reference.  This is only allowed when creating the authinfo,
+	 * otherwise it means something has gone wrong.  This cannot
+	 * catch every bad (re)use of a freed authinfo but it may catch
+	 * a few.
+	 */
+	assert(newcount > 1 || creating);
+	L9P_LOG(L9P_DEBUG, "open_fid: authinfo %p now used by %lu",
+	    (void *)ai, (u_long)newcount);
 	ret->ff_ai = ai;
 	return (ret);
 }
@@ -846,6 +862,12 @@ fs_attach(void *softc, struct l9p_request *req)
 		free(gids);
 		return (ENOMEM);
 	}
+	error = pthread_mutex_init(&ai->ai_mtx, NULL);
+	if (error) {
+		free(gids);
+		free(ai);
+		return (error);
+	}
 	ai->ai_refcnt = 0;
 	ai->ai_uid = pwd != NULL ? pwd->pw_uid : uid;
 	ai->ai_flags = 0;	/* XXX for now */
@@ -853,8 +875,9 @@ fs_attach(void *softc, struct l9p_request *req)
 	memcpy(ai->ai_gids, gids, (size_t)ngroups * sizeof(gid_t));
 	free(gids);
 
-	file = open_fid(sc->fs_rootpath, ai);
+	file = open_fid(sc->fs_rootpath, ai, true);
 	if (file == NULL) {
+		pthread_mutex_destroy(&ai->ai_mtx);
 		free(ai);
 		return (ENOMEM);
 	}
@@ -1812,7 +1835,7 @@ fs_walk(void *softc, struct l9p_request *req)
 		error = 0;
 	}
 
-	newfile = open_fid(succ, ai);
+	newfile = open_fid(succ, ai, false);
 	if (newfile == NULL) {
 		error = ENOMEM;
 		goto out;
@@ -2815,6 +2838,7 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 {
 	struct fs_fid *f = fid->lo_aux;
 	struct fs_authinfo *ai;
+	uint32_t newcount;
 
 	if (f == NULL) {
 		/* Nothing to do here */
@@ -2832,14 +2856,21 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 	ai = f->ff_ai;
 	l9p_acl_free(f->ff_acl);
 	free(f);
-	if (--ai->ai_refcnt == 0) {
+	pthread_mutex_lock(&ai->ai_mtx);
+	newcount = --ai->ai_refcnt;
+	pthread_mutex_unlock(&ai->ai_mtx);
+	if (newcount == 0) {
+		/*
+		 * We *were* the last ref, no one can have gained a ref.
+		 */
 		L9P_LOG(L9P_DEBUG,
 		    "fs_freefid: dropped last ref to authinfo %p",
 		    (void *)ai);
+		pthread_mutex_destroy(&ai->ai_mtx);
 		free(ai);
 	} else {
-		L9P_LOG(L9P_DEBUG, "fs_freefid: authinfo %p now used by %d",
-		    (void *)ai, ai->ai_refcnt);
+		L9P_LOG(L9P_DEBUG, "fs_freefid: authinfo %p now used by %lu",
+		    (void *)ai, (u_long)newcount);
 	}
 }
 

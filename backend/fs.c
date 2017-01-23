@@ -138,6 +138,14 @@ struct fs_authinfo {
 };
 
 /*
+ * We have a global-static mutex for single-threading Tattach
+ * requests, which use getpwnam (and indirectly, getgr* functions)
+ * which are not reentrant.
+ */
+static bool fs_attach_mutex_inited;
+static pthread_mutex_t fs_attach_mutex;
+
+/*
  * Internal functions (except inline functions).
  */
 static int fs_buildname(struct l9p_fid *, char *, char *, size_t);
@@ -812,14 +820,20 @@ fs_attach(void *softc, struct l9p_request *req)
 
 	assert(req->lr_fid != NULL);
 
+	/*
+	 * Single-thread pwd/group related items.  We have a reentrant
+	 * r_getpwuid but not a reentrant r_getpwnam, and l9p_getgrlist
+	 * may use non-reentrant C library getgr* routines.
+	 */
+	pthread_mutex_lock(&fs_attach_mutex);
+
 	n_uname = req->lr_req.tattach.n_uname;
 	if (n_uname != L9P_NONUNAME) {
 		uid = (uid_t)n_uname;
 		pwd = getpwuid(uid);
 		if (pwd == NULL)
 			L9P_LOG(L9P_DEBUG,
-			    "Tattach: uid %lu: no such user",
-			    (u_long)uid);
+			    "Tattach: uid %ld: no such user", (long)uid);
 	} else {
 		uid = (uid_t)-1;
 		pwd = getpwnam(req->lr_req.tattach.uname);
@@ -829,18 +843,30 @@ fs_attach(void *softc, struct l9p_request *req)
 			    req->lr_req.tattach.uname);
 	}
 
-	if (pwd == NULL && req->lr_conn->lc_version != L9P_2000L)
-		return (EPERM);
-
-	error = 0;
-	if (lstat(sc->fs_rootpath, &st) != 0)
-		error = errno;
-	else if (!S_ISDIR(st.st_mode))
-		error = ENOTDIR;
+	/*
+	 * If caller didn't give a numeric UID, pick it up from pwd
+	 * if possible.  If that doesn't work we can't continue.
+	 *
+	 * Note that pwd also supplies the group set.  This assumes
+	 * the server has the right mapping; this needs improvement.
+	 * We do at least support ai->ai_ngids==0 properly now though.
+	 */
+	if (uid == (uid_t)-1 && pwd != NULL)
+		uid = pwd->pw_uid;
+	if (uid == (uid_t)-1)
+		error = EPERM;
+	else {
+		error = 0;
+		if (lstat(sc->fs_rootpath, &st) != 0)
+			error = errno;
+		else if (!S_ISDIR(st.st_mode))
+			error = ENOTDIR;
+	}
 	if (error) {
+		pthread_mutex_unlock(&fs_attach_mutex);
 		L9P_LOG(L9P_DEBUG,
-		    "Tattach: denying access to \"%s\": %s",
-		    sc->fs_rootpath, strerror(error));
+		    "Tattach: denying uid=%ld access to \"%s\": %s",
+		    (long)uid, sc->fs_rootpath, strerror(error));
 		/*
 		 * Pass ENOENT and ENOTDIR through for diagnosis;
 		 * others become EPERM.  This should not leak too
@@ -850,13 +876,23 @@ fs_attach(void *softc, struct l9p_request *req)
 	}
 
 	if (pwd != NULL) {
+		/*
+		 * This either succeeds and fills in ngroups and
+		 * returns non-NULL, or fails and sets ngroups to 0
+		 * and returns NULL.  Either way ngroups is correct.
+		 */
 		gids = l9p_getgrlist(pwd->pw_name, pwd->pw_gid, &ngroups);
-		if (gids == NULL)
-			return (ENOMEM);
 	} else {
 		gids = NULL;
 		ngroups = 0;
 	}
+
+	/*
+	 * Done with pwd and group related items that may use
+	 * non-reentrant C library routines; allow other threads in.
+	 */
+	pthread_mutex_unlock(&fs_attach_mutex);
+
 	ai = malloc(sizeof(*ai) + (size_t)ngroups * sizeof(gid_t));
 	if (ai == NULL) {
 		free(gids);
@@ -869,7 +905,7 @@ fs_attach(void *softc, struct l9p_request *req)
 		return (error);
 	}
 	ai->ai_refcnt = 0;
-	ai->ai_uid = pwd != NULL ? pwd->pw_uid : uid;
+	ai->ai_uid = uid;
 	ai->ai_flags = 0;	/* XXX for now */
 	ai->ai_ngids = ngroups;
 	memcpy(ai->ai_gids, gids, (size_t)ngroups * sizeof(gid_t));
@@ -2880,6 +2916,16 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	struct l9p_backend *backend;
 	struct fs_softc *sc;
 	const char *rroot;
+	int error;
+
+	if (!fs_attach_mutex_inited) {
+		error = pthread_mutex_init(&fs_attach_mutex, NULL);
+		if (error) {
+			errno = error;
+			return (-1);
+		}
+		fs_attach_mutex_inited = true;
+	}
 
 	rroot = realpath(root, NULL);
 	if (rroot == NULL)

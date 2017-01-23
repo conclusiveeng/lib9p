@@ -182,6 +182,10 @@ l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length)
  * This wrapper for getgrouplist() that malloc'ed memory, and
  * papers over FreeBSD vs Mac differences in the getgrouplist()
  * argument types.
+ *
+ * Note that this function guarantees that *either*:
+ *     return value != NULL and *angroups has been set
+ * or: return value == NULL and *angroups is 0
  */
 gid_t *
 l9p_getgrlist(const char *name, gid_t basegid, int *angroups)
@@ -206,8 +210,10 @@ l9p_getgrlist(const char *name, gid_t basegid, int *angroups)
 		groups = NULL;
 	}
 #endif
-	if (groups == NULL)
+	if (groups == NULL) {
+		*angroups = 0;
 		return (NULL);
+	}
 #ifdef GETGROUPS_GROUP_TYPE_IS_INT
 	(void) getgrouplist(name, (int)basegid, int_groups, &ngroups);
 	for (i = 0; i < ngroups; i++)

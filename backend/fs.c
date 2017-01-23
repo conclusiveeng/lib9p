@@ -532,6 +532,8 @@ open_fid(const char *path, struct fs_authinfo *ai)
 		return (NULL);
 	}
 	ai->ai_refcnt++;
+	L9P_LOG(L9P_DEBUG, "open_fid: authinfo %p now used by %d",
+	    (void *)ai, ai->ai_refcnt);
 	ret->ff_ai = ai;
 	return (ret);
 }
@@ -2830,8 +2832,15 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 	ai = f->ff_ai;
 	l9p_acl_free(f->ff_acl);
 	free(f);
-	if (--ai->ai_refcnt == 0)
+	if (--ai->ai_refcnt == 0) {
+		L9P_LOG(L9P_DEBUG,
+		    "fs_freefid: dropped last ref to authinfo %p",
+		    (void *)ai);
 		free(ai);
+	} else {
+		L9P_LOG(L9P_DEBUG, "fs_freefid: authinfo %p now used by %d",
+		    (void *)ai, ai->ai_refcnt);
+	}
 }
 
 int

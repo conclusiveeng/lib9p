@@ -263,7 +263,7 @@ int l9p_acl_check_access(int32_t opmask, struct l9p_acl_check_args *args)
 #ifdef ACE_DEBUG
 	L9P_LOG(L9P_DEBUG,
 	    "l9p_acl_check_access: opmask=0x%x uid=%ld gid=%ld ngids=%zd",
-	    (u_int)mask, (long)uid, (long)gid, ngids);
+	    (u_int)opmask, (long)uid, (long)gid, ngids);
 #endif
 	/*
 	 * If caller said "superuser semantics", check that first.

@@ -796,11 +796,10 @@ check_access(int32_t opmask,
 	args.aca_cstat = cst;
 	if (pacl == NULL && cacl == NULL) {
 		args.aca_aclmode = L9P_ACM_STAT_MODE;
-		args.aca_superuser = true;
 	} else {
 		args.aca_aclmode = L9P_ACM_NFS_ACL | L9P_ACM_ZFS_ACL;
-		args.aca_superuser = false;
 	}
+	args.aca_superuser = true;
 	return (l9p_acl_check_access(opmask, &args));
 }
 

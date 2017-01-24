@@ -184,7 +184,7 @@ l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
 			mask &= ~ace->ace_mask;
 #ifdef ACE_DEBUG
 			L9P_LOG(L9P_DEBUG, "clear 0x%x: now mask=0x%x",
-			    (u_int)ace->ace_mask, mask);
+			    (u_int)ace->ace_mask, (u_int)mask);
 #endif
 		} else {
 #ifdef ACE_DEBUG
@@ -259,6 +259,18 @@ int l9p_acl_check_access(int32_t opmask, struct l9p_acl_check_args *args)
 	gid = args->aca_gid;
 	gids = args->aca_groups;
 	ngids = args->aca_ngroups;
+
+#ifdef ACE_DEBUG
+	L9P_LOG(L9P_DEBUG,
+	    "l9p_acl_check_access: opmask=0x%x uid=%ld gid=%ld ngids=%zd",
+	    (u_int)mask, (long)uid, (long)gid, ngids);
+#endif
+	/*
+	 * If caller said "superuser semantics", check that first.
+	 * Note that we apply them regardless of ACLs.
+	 */
+	if (uid == 0 && args->aca_superuser)
+		return (0);
 
 	/*
 	 * If told to ignore ACLs and use only stat-based permissions,
@@ -391,9 +403,6 @@ int l9p_acl_check_access(int32_t opmask, struct l9p_acl_check_args *args)
 	if (args->aca_aclmode & L9P_ACM_STAT_MODE) {
 		struct stat *st;
 		int rwx, bits;
-
-		if (uid == 0 && args->aca_superuser)
-			return (0);
 
 		rwx = l9p_ace_mask_to_rwx(opmask);
 		if ((st = cstat) == NULL || (opmask & L9P_ACE_DELETE_CHILD))

@@ -1276,7 +1276,7 @@ fs_imkdir(void *softc, struct l9p_fid *dir, char *name,
 	if (mkdir(newname, perm) != 0)
 		return (errno);
 
-	fd = open(newname, O_DIRECTORY | O_RDONLY);
+	fd = open(newname, O_DIRECTORY | O_RDONLY | O_NOFOLLOW);
 	if (fd < 0 ||
 	    fchown(fd, uid, gid) != 0 ||
 	    fchmod(fd, perm) != 0 ||

@@ -347,6 +347,15 @@ l9p_respond(struct l9p_request *req, bool drop, bool rmtag)
 
 #if defined(L9P_DEBUG)
 	sb = sbuf_new_auto();
+	if (req->lr_flushstate == L9P_FLUSH_NOT_RUN) {
+		/*
+		 * The original request itself did not reach
+		 * l9p_dispatch_request, so it did not get logged.
+		 * Let's log it now.
+		 */
+		l9p_describe_fcall(&req->lr_req, conn->lc_version, sb);
+		sbuf_cat(sb, "\n\t ...: ");
+	}
 	l9p_describe_fcall(&req->lr_resp, conn->lc_version, sb);
 	sbuf_finish(sb);
 

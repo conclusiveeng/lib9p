@@ -556,7 +556,7 @@ open_fid(const char *path, struct fs_authinfo *ai, bool creating)
 	 * a few.
 	 */
 	assert(newcount > 1 || creating);
-	L9P_LOG(L9P_DEBUG, "open_fid: authinfo %p now used by %lu",
+	L9P_LOG(L9P_DEBUG, "authinfo %p now used by %lu",
 	    (void *)ai, (u_long)newcount);
 	ret->ff_ai = ai;
 	return (ret);
@@ -2898,13 +2898,12 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 		/*
 		 * We *were* the last ref, no one can have gained a ref.
 		 */
-		L9P_LOG(L9P_DEBUG,
-		    "fs_freefid: dropped last ref to authinfo %p",
+		L9P_LOG(L9P_DEBUG, "dropped last ref to authinfo %p",
 		    (void *)ai);
 		pthread_mutex_destroy(&ai->ai_mtx);
 		free(ai);
 	} else {
-		L9P_LOG(L9P_DEBUG, "fs_freefid: authinfo %p now used by %lu",
+		L9P_LOG(L9P_DEBUG, "authinfo %p now used by %lu",
 		    (void *)ai, (u_long)newcount);
 	}
 }

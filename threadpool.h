@@ -86,12 +86,12 @@ enum l9p_workstate {
  * Tflush affected the request.
  *
  * If a Tflush comes in before we ever assign a work thread,
- * the flush state goes to FLUSHED_NOT_RUN.
+ * the flush state goes to FLUSH_REQUESTED_PRE_START.
  *
  * If a Tflush comes in after we assign a work thread, the
- * flush state goes to FLUSH_REQUESTED.  The flush request may
- * be too late: the request might finish anyway.  Or it might
- * be soon enough to abort.  In all cases, though, the
+ * flush state goes to FLUSH_REQUESTED_POST_START.  The flush
+ * request may be too late: the request might finish anyway.
+ * Or it might be soon enough to abort.  In all cases, though, the
  * operation requesting the flush (the "flusher") must wait for
  * the other request (the "flushee") to go through the respond
  * path.  The respond routine gets to decide whether to send a
@@ -104,8 +104,8 @@ enum l9p_workstate {
  */
 enum l9p_flushstate {
 	L9P_FLUSH_NONE = 0,		/* must be zero */
-	L9P_FLUSH_NOT_RUN,		/* not even started before flush */
-	L9P_FLUSH_REQUESTED,		/* started, then someone said flush */
+	L9P_FLUSH_REQUESTED_PRE_START,	/* not even started before flush */
+	L9P_FLUSH_REQUESTED_POST_START,	/* started, then someone said flush */
 	L9P_FLUSH_TOOLATE		/* too late, already responding */
 };
 

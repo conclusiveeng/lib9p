@@ -70,15 +70,7 @@ l9p_responder(void *arg)
 		pthread_mutex_unlock(&tp->ltp_mtx);
 
 		/* send response */
-#ifdef notyet
-		/* might want something simpler, e.g., req->lr_drop? */
-		drop = req->lr_flushstate == L9P_FLUSH_NOT_RUN ||
-		    (req->lr_flushstate == L9P_FLUSH_REQUESTED &&
-		     req->lr_error != 0);
-		l9p_respond(req, drop, true);
-#else
 		l9p_respond(req, false, true);
-#endif
 	}
 	return (NULL);
 }
@@ -301,24 +293,33 @@ l9p_threadpool_tflush(struct l9p_request *req)
 	pthread_mutex_lock(&tp->ltp_mtx);
 	ht_unlock(&conn->lc_requests);
 
-	nstate = L9P_FLUSH_REQUESTED;
 	switch (flushee->lr_workstate) {
 
 	case L9P_WS_NOTSTARTED:
 		/*
 		 * Flushee is on work queue, but not yet being
-		 * handled by a worker.  Pull it off the work queue.
-		 * Mark it as flushed, failed, and never actually run.
+		 * handled by a worker.
 		 *
-		 * STAILQ_REMOVE is slow: maybe leave it in work
-		 * queue, but marked with a new work state and
-		 * let the worker move it later?  Tflush should be
-		 * rare though.
+		 * The documentation -- see
+		 * http://ericvh.github.io/9p-rfc/rfc9p2000.html
+		 * https://swtch.com/plan9port/man/man9/flush.html
+		 * -- says that "the server should answer the
+		 * flush message immediately".  However, Linux
+		 * sends flush requests for operations that
+		 * must finish, such as Tclunk, and it's not
+		 * possible to *answer* the flush request until
+		 * it has been handled (if necessary) or aborted
+		 * (if allowed).
+		 *
+		 * We therefore now just  the original request
+		 * and let the request-handler do whatever is
+		 * appropriate.  NOTE: we could have a table of
+		 * "requests that can be aborted without being
+		 * run" vs "requests that must be run to be
+		 * aborted", but for now that seems like an
+		 * unnecessary complication.
 		 */
-		STAILQ_REMOVE(&tp->ltp_workq, flushee,
-		    l9p_request, lr_worklink);
-		flushee->lr_error = EINTR;
-		nstate = L9P_FLUSH_NOT_RUN;
+		nstate = L9P_FLUSH_REQUESTED_PRE_START;
 		break;
 
 	case L9P_WS_IMMEDIATE:
@@ -329,6 +330,7 @@ l9p_threadpool_tflush(struct l9p_request *req)
 		 * request for the flushee that arrived too late to
 		 * do anything about the flushee.
 		 */
+		nstate = L9P_FLUSH_REQUESTED_POST_START;
 		break;
 
 	case L9P_WS_INPROGRESS:
@@ -342,6 +344,7 @@ l9p_threadpool_tflush(struct l9p_request *req)
 #ifdef notyet
 		pthread_kill(...);
 #endif
+		nstate = L9P_FLUSH_REQUESTED_POST_START;
 		break;
 
 	case L9P_WS_RESPQUEUED:
@@ -377,17 +380,6 @@ l9p_threadpool_tflush(struct l9p_request *req)
 		STAILQ_INIT(&flushee->lr_flushq);
 	flushee->lr_flushstate = nstate;
 	STAILQ_INSERT_TAIL(&flushee->lr_flushq, req, lr_flushlink);
-
-	if (nstate == L9P_FLUSH_NOT_RUN) {
-		/*
-		 * We took the flushee out of the work queue, and
-		 * now it's on NO queue.  Put it on the response
-		 * queue.  (Should we put it at the head?)
-		 */
-		flushee->lr_workstate = L9P_WS_RESPQUEUED;
-		STAILQ_INSERT_TAIL(&tp->ltp_replyq, flushee, lr_worklink);
-		pthread_cond_signal(&tp->ltp_reply_cv);
-	}
 
 	pthread_mutex_unlock(&tp->ltp_mtx);
 

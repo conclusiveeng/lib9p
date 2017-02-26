@@ -79,75 +79,91 @@ static int l9p_dispatch_tmkdir(struct l9p_request *req);
 static int l9p_dispatch_trenameat(struct l9p_request *req);
 static int l9p_dispatch_tunlinkat(struct l9p_request *req);
 
+/*
+ * Each Txxx handler has a "must run" flag.  If it is false,
+ * we check for a flush request before calling the handler.
+ * If a flush is already requested we can instantly fail the
+ * request with EINTR.
+ *
+ * Tclunk and Tremove must run because they make their fids
+ * become invalid.  Tversion and Tattach should never get
+ * a flush request applied (it makes no sense as the connection
+ * is not really running yet), so it should be harmless to
+ * set them either way, but for now we have them as must-run.
+ * Flushing a Tflush is not really allowed either so we keep
+ * these as must-run too (although they run without being done
+ * threaded anyway).
+ */
 struct l9p_handler {
 	enum l9p_ftype type;
 	int (*handler)(struct l9p_request *);
+	bool must_run;
 };
 
 static const struct l9p_handler l9p_handlers_no_version[] = {
-	{L9P_TVERSION, l9p_dispatch_tversion},
+	{L9P_TVERSION, l9p_dispatch_tversion, true},
 };
 
 static const struct l9p_handler l9p_handlers_base[] = {
-	{L9P_TVERSION, l9p_dispatch_tversion},
-	{L9P_TATTACH, l9p_dispatch_tattach},
-	{L9P_TCLUNK, l9p_dispatch_tclunk},
-	{L9P_TFLUSH, l9p_threadpool_tflush},
-	{L9P_TCREATE, l9p_dispatch_tcreate},
-	{L9P_TOPEN, l9p_dispatch_topen},
-	{L9P_TREAD, l9p_dispatch_tread},
-	{L9P_TWRITE, l9p_dispatch_twrite},
-	{L9P_TREMOVE, l9p_dispatch_tremove},
-	{L9P_TSTAT, l9p_dispatch_tstat},
-	{L9P_TWALK, l9p_dispatch_twalk},
-	{L9P_TWSTAT, l9p_dispatch_twstat}
+	{L9P_TVERSION, l9p_dispatch_tversion, true},
+	{L9P_TATTACH, l9p_dispatch_tattach, true},
+	{L9P_TCLUNK, l9p_dispatch_tclunk, true},
+	{L9P_TFLUSH, l9p_threadpool_tflush, true},
+	{L9P_TCREATE, l9p_dispatch_tcreate, false},
+	{L9P_TOPEN, l9p_dispatch_topen, false},
+	{L9P_TREAD, l9p_dispatch_tread, false},
+	{L9P_TWRITE, l9p_dispatch_twrite, false},
+	{L9P_TREMOVE, l9p_dispatch_tremove, true},
+	{L9P_TSTAT, l9p_dispatch_tstat, false},
+	{L9P_TWALK, l9p_dispatch_twalk, false},
+	{L9P_TWSTAT, l9p_dispatch_twstat, false}
 };
 static const struct l9p_handler l9p_handlers_dotu[] = {
-	{L9P_TVERSION, l9p_dispatch_tversion},
-	{L9P_TATTACH, l9p_dispatch_tattach},
-	{L9P_TCLUNK, l9p_dispatch_tclunk},
-	{L9P_TFLUSH, l9p_threadpool_tflush},
-	{L9P_TCREATE, l9p_dispatch_tcreate},
-	{L9P_TOPEN, l9p_dispatch_topen},
-	{L9P_TREAD, l9p_dispatch_tread},
-	{L9P_TWRITE, l9p_dispatch_twrite},
-	{L9P_TREMOVE, l9p_dispatch_tremove},
-	{L9P_TSTAT, l9p_dispatch_tstat},
-	{L9P_TWALK, l9p_dispatch_twalk},
-	{L9P_TWSTAT, l9p_dispatch_twstat}
+	{L9P_TVERSION, l9p_dispatch_tversion, true},
+	{L9P_TATTACH, l9p_dispatch_tattach, true},
+	{L9P_TCLUNK, l9p_dispatch_tclunk, true},
+	{L9P_TFLUSH, l9p_threadpool_tflush, true},
+	{L9P_TCREATE, l9p_dispatch_tcreate, false},
+	{L9P_TOPEN, l9p_dispatch_topen, false},
+	{L9P_TREAD, l9p_dispatch_tread, false},
+	{L9P_TWRITE, l9p_dispatch_twrite, false},
+	{L9P_TREMOVE, l9p_dispatch_tremove, true},
+	{L9P_TSTAT, l9p_dispatch_tstat, false},
+	{L9P_TWALK, l9p_dispatch_twalk, false},
+	{L9P_TWSTAT, l9p_dispatch_twstat, false}
 };
 static const struct l9p_handler l9p_handlers_dotL[] = {
-	{L9P_TVERSION, l9p_dispatch_tversion},
-	{L9P_TATTACH, l9p_dispatch_tattach},
-	{L9P_TCLUNK, l9p_dispatch_tclunk},
-	{L9P_TFLUSH, l9p_threadpool_tflush},
-	{L9P_TCREATE, l9p_dispatch_tcreate},
-	{L9P_TOPEN, l9p_dispatch_topen},
-	{L9P_TREAD, l9p_dispatch_tread},
-	{L9P_TWRITE, l9p_dispatch_twrite},
-	{L9P_TREMOVE, l9p_dispatch_tremove},
-	{L9P_TSTAT, l9p_dispatch_tstat},
-	{L9P_TWALK, l9p_dispatch_twalk},
-	{L9P_TWSTAT, l9p_dispatch_twstat},
-	{L9P_TSTATFS, l9p_dispatch_tstatfs},
-	{L9P_TLOPEN, l9p_dispatch_tlopen},
-	{L9P_TLCREATE, l9p_dispatch_tlcreate},
-	{L9P_TSYMLINK, l9p_dispatch_tsymlink},
-	{L9P_TMKNOD, l9p_dispatch_tmknod},
-	{L9P_TRENAME, l9p_dispatch_trename},
-	{L9P_TREADLINK, l9p_dispatch_treadlink},
-	{L9P_TGETATTR, l9p_dispatch_tgetattr},
-	{L9P_TSETATTR, l9p_dispatch_tsetattr},
-	{L9P_TXATTRWALK, l9p_dispatch_txattrwalk},
-	{L9P_TXATTRCREATE, l9p_dispatch_txattrcreate},
-	{L9P_TREADDIR, l9p_dispatch_treaddir},
-	{L9P_TFSYNC, l9p_dispatch_tfsync},
-	{L9P_TLOCK, l9p_dispatch_tlock},
-	{L9P_TGETLOCK, l9p_dispatch_tgetlock},
-	{L9P_TLINK, l9p_dispatch_tlink},
-	{L9P_TMKDIR, l9p_dispatch_tmkdir},
-	{L9P_TRENAMEAT, l9p_dispatch_trenameat},
-	{L9P_TUNLINKAT, l9p_dispatch_tunlinkat},
+	{L9P_TVERSION, l9p_dispatch_tversion, true},
+	{L9P_TATTACH, l9p_dispatch_tattach, true},
+	{L9P_TCLUNK, l9p_dispatch_tclunk, true},
+	{L9P_TFLUSH, l9p_threadpool_tflush, true},
+	{L9P_TCREATE, l9p_dispatch_tcreate, false},
+	{L9P_TOPEN, l9p_dispatch_topen, false},
+	{L9P_TREAD, l9p_dispatch_tread, false},
+	{L9P_TWRITE, l9p_dispatch_twrite, false},
+	{L9P_TREMOVE, l9p_dispatch_tremove, true},
+	{L9P_TSTAT, l9p_dispatch_tstat, false},
+	{L9P_TWALK, l9p_dispatch_twalk, false},
+	{L9P_TWSTAT, l9p_dispatch_twstat, false},
+	{L9P_TSTATFS, l9p_dispatch_tstatfs, false},
+	{L9P_TLOPEN, l9p_dispatch_tlopen, false},
+	{L9P_TLCREATE, l9p_dispatch_tlcreate, false},
+	{L9P_TSYMLINK, l9p_dispatch_tsymlink, false},
+	{L9P_TMKNOD, l9p_dispatch_tmknod, false},
+	{L9P_TRENAME, l9p_dispatch_trename, false},
+	{L9P_TREADLINK, l9p_dispatch_treadlink, false},
+	{L9P_TGETATTR, l9p_dispatch_tgetattr, false},
+	{L9P_TSETATTR, l9p_dispatch_tsetattr, false},
+	{L9P_TXATTRWALK, l9p_dispatch_txattrwalk, false},
+	{L9P_TXATTRCREATE, l9p_dispatch_txattrcreate, false},
+	{L9P_TREADDIR, l9p_dispatch_treaddir, false},
+	{L9P_TFSYNC, l9p_dispatch_tfsync, false},
+	{L9P_TLOCK, l9p_dispatch_tlock, false},
+	{L9P_TGETLOCK, l9p_dispatch_tgetlock, false},
+	{L9P_TLINK, l9p_dispatch_tlink, false},
+	{L9P_TMKDIR, l9p_dispatch_tmkdir, false},
+	{L9P_TRENAMEAT, l9p_dispatch_trenameat, false},
+	{L9P_TUNLINKAT, l9p_dispatch_tunlinkat, false},
 };
 
 /*
@@ -178,11 +194,28 @@ l9p_dispatch_request(struct l9p_request *req)
 	struct sbuf *sb;
 #endif
 	size_t i, n;
-	const struct l9p_handler *handlers;
+	const struct l9p_handler *handlers, *hp;
+	bool flush_requested;
 
 	conn = req->lr_conn;
+	flush_requested = req->lr_flushstate == L9P_FLUSH_REQUESTED_PRE_START;
+
+	handlers = l9p_versions[conn->lc_version].handlers;
+	n = (size_t)l9p_versions[conn->lc_version].n_handlers;
+	for (hp = handlers, i = 0; i < n; hp++, i++)
+		if (req->lr_req.hdr.type == hp->type)
+			goto found;
+	hp = NULL;
+found:
+
 #if defined(L9P_DEBUG)
 	sb = sbuf_new_auto();
+	if (flush_requested) {
+		sbuf_cat(sb, "FLUSH requested pre-dispatch");
+		if (hp != NULL && hp->must_run)
+			sbuf_cat(sb, ", but must run");
+		sbuf_cat(sb, ": ");
+	}
 	l9p_describe_fcall(&req->lr_req, conn->lc_version, sb);
 	sbuf_finish(sb);
 
@@ -190,11 +223,11 @@ l9p_dispatch_request(struct l9p_request *req)
 	sbuf_delete(sb);
 #endif
 
-	handlers = l9p_versions[conn->lc_version].handlers;
-	n = (size_t)l9p_versions[conn->lc_version].n_handlers;
-	for (i = 0; i < n; i++)
-		if (req->lr_req.hdr.type == handlers[i].type)
-			return (handlers[i].handler(req));
+	if (hp != NULL) {
+		if (!flush_requested || hp->must_run)
+			return (hp->handler(req));
+		return (EINTR);
+	}
 
 	L9P_LOG(L9P_WARNING, "unknown request of type %d",
 	    req->lr_req.hdr.type);
@@ -347,15 +380,6 @@ l9p_respond(struct l9p_request *req, bool drop, bool rmtag)
 
 #if defined(L9P_DEBUG)
 	sb = sbuf_new_auto();
-	if (req->lr_flushstate == L9P_FLUSH_NOT_RUN) {
-		/*
-		 * The original request itself did not reach
-		 * l9p_dispatch_request, so it did not get logged.
-		 * Let's log it now.
-		 */
-		l9p_describe_fcall(&req->lr_req, conn->lc_version, sb);
-		sbuf_cat(sb, "\n\t ...: ");
-	}
 	l9p_describe_fcall(&req->lr_resp, conn->lc_version, sb);
 	sbuf_finish(sb);
 
@@ -363,10 +387,10 @@ l9p_respond(struct l9p_request *req, bool drop, bool rmtag)
 	case L9P_FLUSH_NONE:
 		ftype = "";
 		break;
-	case L9P_FLUSH_NOT_RUN:
-		ftype = "FLUSHed (never run): ";
+	case L9P_FLUSH_REQUESTED_PRE_START:
+		ftype = "FLUSH requested pre-dispatch: ";
 		break;
-	case L9P_FLUSH_REQUESTED:
+	case L9P_FLUSH_REQUESTED_POST_START:
 		ftype = "FLUSH requested while running: ";
 		break;
 	case L9P_FLUSH_TOOLATE:

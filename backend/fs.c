@@ -2658,29 +2658,24 @@ fs_lock(void *softc, struct l9p_request *req)
 static int
 fs_getlock(void *softc __unused, struct l9p_request *req)
 {
-	struct fs_fid *file;
-	struct flock fl;
 
-	file = req->lr_fid->lo_aux;
-
-	if (fcntl(file->ff_fd, F_GETLK, (void *)&fl) != 0)
-		return (errno);
-
-	req->lr_resp.getlock.proc_id = (uint32_t)fl.l_pid;
-	req->lr_resp.getlock.start = (uint64_t)fl.l_start;
-	req->lr_resp.getlock.length = (uint64_t)fl.l_len;
-	switch (fl.l_type) {
-	case F_RDLCK:
-		req->lr_resp.getlock.type = L9PL_LOCK_TYPE_RDLOCK;
+	/*
+	 * Client wants to see if a request to lock a region would
+	 * block.  This is, of course, not atomic anyway, so the
+	 * op is useless.  QEMU simply says "unlocked!", so we do
+	 * too.
+	 */
+	switch (req->lr_req.getlock.type) {
+	case L9PL_LOCK_TYPE_RDLOCK:
+	case L9PL_LOCK_TYPE_WRLOCK:
+	case L9PL_LOCK_TYPE_UNLOCK:
 		break;
-	case F_WRLCK:
-		req->lr_resp.getlock.type = L9PL_LOCK_TYPE_WRLOCK;
-		break;
-	case F_UNLCK:
-	default:	/* ??? should never happen */
-		req->lr_resp.getlock.type = L9PL_LOCK_TYPE_UNLOCK;
-		break;
+	default:
+		return (EINVAL);
 	}
+
+	req->lr_resp.getlock = req->lr_req.getlock;
+	req->lr_resp.getlock.type = L9PL_LOCK_TYPE_UNLOCK;
 	req->lr_resp.getlock.client_id = (char *)"";  /* XXX what should go here? */
 	return (0);
 }

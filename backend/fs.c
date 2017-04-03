@@ -2613,14 +2613,10 @@ fs_fsync(void *softc __unused, struct l9p_request *req)
 }
 
 static int
-fs_lock(void *softc, struct l9p_request *req)
+fs_lock(void *softc __unused, struct l9p_request *req)
 {
-	struct fs_softc *sc = softc;
 	struct fs_fid *file;
 	struct flock fl;
-
-	if (sc->fs_readonly)
-		return (EROFS);
 
 	file = req->lr_fid->lo_aux;
 	fl.l_start = (off_t)req->lr_req.tlock.start;

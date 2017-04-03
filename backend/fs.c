@@ -2615,36 +2615,14 @@ fs_fsync(void *softc __unused, struct l9p_request *req)
 static int
 fs_lock(void *softc __unused, struct l9p_request *req)
 {
-	struct fs_fid *file;
-	struct flock fl;
 
-	file = req->lr_fid->lo_aux;
-	fl.l_start = (off_t)req->lr_req.tlock.start;
-	fl.l_len = (off_t)req->lr_req.tlock.length;
-	/* fl.l_pid = (pid_t)req->lr_req.tlock.proc_id; -- output only */
 	switch (req->lr_req.tlock.type) {
 	case L9PL_LOCK_TYPE_RDLOCK:
-		fl.l_type = F_RDLCK;
-		break;
 	case L9PL_LOCK_TYPE_WRLOCK:
-		fl.l_type = F_WRLCK;
-		break;
 	case L9PL_LOCK_TYPE_UNLOCK:
-		fl.l_type = F_UNLCK;
 		break;
 	default:
 		return (EINVAL);
-	}
-	fl.l_whence = SEEK_SET;
-
-	if (fcntl(file->ff_fd, F_SETLK, (void *)&fl) != 0) {
-		if (errno == EAGAIN) {
-			req->lr_resp.rlock.status = L9PL_LOCK_BLOCKED;
-			return (0);
-		}
-
-		req->lr_resp.rlock.status = L9PL_LOCK_ERROR;
-		return (0);
 	}
 
 	req->lr_resp.rlock.status = L9PL_LOCK_SUCCESS;

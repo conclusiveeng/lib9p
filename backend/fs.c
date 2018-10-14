@@ -26,7 +26,7 @@
  */
 
 /*
- * Based on libixp code: Â©2007-2010 Kris Maglione <maglione.k at Gmail>
+ * Based on libixp code: ©2007-2010 Kris Maglione <maglione.k at Gmail>
  */
 
 #include <stdlib.h>
@@ -74,16 +74,8 @@
   #define	HAVE_BIRTHTIME
 #endif
 
-#if defined(__FreeBSD__)
-  /* should probably check version but fstatat has been in for ages */
-  #define HAVE_FSTATAT
-#endif
-
 #if defined(__APPLE__)
   #include "Availability.h"
-  #if __MAC_OS_X_VERSION_MIN_REQUIRED > 1090
-    #define HAVE_FSTATAT
-  #endif
   #define ACL_TYPE_NFS4 ACL_TYPE_EXTENDED
 #endif
 
@@ -689,8 +681,9 @@ static void dostatfs(struct l9p_statfs *out, struct statfs *in, long namelen)
 	out->bavail = in->f_bavail;
 	out->files = in->f_files;
 	out->ffree = in->f_ffree;
-	out->fsid = ((uint64_t)in->f_fsid.val[0] << 32) | (uint64_t)in->f_fsid.val[1];
 	out->namelen = (uint32_t)namelen;
+	out->fsid = ((uint64_t)in->f_fsid.val[0] << 32) |
+	    (uint64_t)in->f_fsid.val[1];
 }
 
 static void
@@ -1612,16 +1605,8 @@ fs_open(void *softc, struct l9p_request *req)
 static inline int
 fs_lstatat(struct fs_fid *file, char *name, struct stat *st)
 {
-#ifdef HAVE_FSTATAT
-	return (fstatat(dirfd(file->ff_dir), name, st, AT_SYMLINK_NOFOLLOW));
-#else
-	char buf[MAXPATHLEN];
 
-	if (strlcpy(buf, file->ff_name, sizeof(buf)) >= sizeof(buf) ||
-	    strlcat(buf, name, sizeof(buf)) >= sizeof(buf))
-		return (-1);
-	return (lstat(name, st));
-#endif
+	return (fstatat(dirfd(file->ff_dir), name, st, AT_SYMLINK_NOFOLLOW));
 }
 
 static int
@@ -2117,7 +2102,8 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	if (fstatat(file->ff_dirfd, file->ff_name, &st, AT_SYMLINK_NOFOLLOW) != 0)
+	if (fstatat(file->ff_dirfd, file->ff_name, &st,
+	    AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 
 	/*
@@ -2307,7 +2293,8 @@ fs_rename(void *softc, struct l9p_request *req)
 	fillacl(file);
 	fillacl(f2ff);
 
-	if (fstatat(file->ff_dirfd, file->ff_name, &cst, AT_SYMLINK_NOFOLLOW) != 0)
+	if (fstatat(file->ff_dirfd, file->ff_name, &cst,
+	    AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 
 	/*
@@ -2329,8 +2316,10 @@ fs_rename(void *softc, struct l9p_request *req)
 	 * for dir write permission if not reparenting -- but that's just
 	 * add-file/add-subdir, which means doing this always.)
 	 */
-	if (fstatat(f2ff->ff_dirfd, f2ff->ff_name, &npst, AT_SYMLINK_NOFOLLOW) != 0)
+	if (fstatat(f2ff->ff_dirfd, f2ff->ff_name, &npst,
+	    AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
+
 	op = S_ISDIR(cst.st_mode) ? L9P_ACE_ADD_SUBDIRECTORY : L9P_ACE_ADD_FILE;
 	error = check_access(op, f2ff->ff_acl, &npst, NULL, NULL,
 	    ai, (gid_t)-1);

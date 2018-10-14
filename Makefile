@@ -13,12 +13,12 @@ SRCS=		pack.c \
 
 INCS=		lib9p.h
 CC=clang
-CFLAGS=		-g -O2 -DL9P_DEBUG=L9P_DEBUG
+CFLAGS=		-g -O2 -DL9P_DEBUG=L9P_DEBUG -DWITH_CASPER
 # Note: to turn on debug, use -DL9P_DEBUG=L9P_DEBUG,
 # and set env variable LIB9P_LOGGING to stderr or to
 # the (preferably full path name of) the debug log file.
 
-LIBADD=		sbuf
+LIBADD=		sbuf libcasper libcap_pwd libcap_grp
 SUBDIR=		example
 
 cscope: .PHONY

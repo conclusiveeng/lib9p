@@ -57,6 +57,11 @@
 #include "backend.h"
 #include "fs.h"
 
+#if defined(WITH_CASPER)
+  #include <libcasper.h>
+  #include <casper/cap_pwd.h>
+#endif
+
 #if defined(__FreeBSD__)
   #include <sys/param.h>
   #if __FreeBSD_version >= 1000000
@@ -84,6 +89,10 @@
 struct fs_softc {
 	int 	fs_rootfd;
 	bool	fs_readonly;
+#if defined(WITH_CASPER)
+	cap_channel_t *fs_cappwd;
+	cap_channel_t *fs_capgrp;
+#endif
 };
 
 struct fs_fid {
@@ -149,6 +158,8 @@ static pthread_mutex_t fs_attach_mutex;
 /*
  * Internal functions (except inline functions).
  */
+static struct passwd *fs_getpwuid(struct fs_softc *, uid_t, struct r_pgdata *);
+static struct group *fs_getgrgid(struct fs_softc *, gid_t, struct r_pgdata *);
 static int fs_buildname(struct l9p_fid *, char *, char *, size_t);
 static int fs_pdir(struct fs_softc *, struct l9p_fid *, char *, size_t,
     struct stat *st);
@@ -158,7 +169,8 @@ static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
 static int fs_nde(struct fs_softc *, struct l9p_fid *, bool, gid_t,
     struct stat *, uid_t *, gid_t *);
 static struct fs_fid *open_fid(int, const char *, struct fs_authinfo *, bool);
-static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
+static void dostat(struct fs_softc *, struct l9p_stat *, char *,
+    struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
 static void fillacl(struct fs_fid *ff);
 static struct l9p_acl *getacl(struct fs_fid *ff, int fd, const char *path);
@@ -404,6 +416,26 @@ fs_oflags_dotl(uint32_t l_mode, int *aflags, enum l9p_omode *ap9)
 #undef CONVERT
 }
 
+static struct passwd *
+fs_getpwuid(struct fs_softc *sc, uid_t uid, struct r_pgdata *pg)
+{
+#if defined(WITH_CASPER)
+	return (r_cap_getpwuid(sc->fs_cappwd, uid, pg));
+#else
+	return (r_getpwuid(uid, pg));
+#endif
+}
+
+static struct group *
+fs_getgrgid(struct fs_softc *sc, gid_t gid, struct r_pgdata *pg)
+{
+#if defined(WITH_CASPER)
+	return (r_cap_getgrgid(sc->fs_capgrp, gid, pg));
+#else
+	return (r_getgrgid(gid, pg));
+#endif
+}
+
 /*
  * Build full name of file by appending given name to directory name.
  */
@@ -564,7 +596,8 @@ open_fid(int dirfd, const char *path, struct fs_authinfo *ai, bool creating)
 }
 
 static void
-dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
+dostat(struct fs_softc *sc, struct l9p_stat *s, char *name,
+    struct stat *buf, bool dotu)
 {
 	struct passwd *user;
 	struct group *group;
@@ -601,8 +634,8 @@ dostat(struct l9p_stat *s, char *name, struct stat *buf, bool dotu)
 	if (!dotu) {
 		struct r_pgdata udata, gdata;
 
-		user = r_getpwuid(buf->st_uid, &udata);
-		group = r_getgrgid(buf->st_gid, &gdata);
+		user = fs_getpwuid(sc, buf->st_uid, &udata);
+		group = fs_getgrgid(sc, buf->st_gid, &gdata);
 		s->uid = user != NULL ? strdup(user->pw_name) : NULL;
 		s->gid = group != NULL ? strdup(group->gr_name) : NULL;
 		s->muid = user != NULL ? strdup(user->pw_name) : NULL;
@@ -812,6 +845,7 @@ fs_attach(void *softc, struct l9p_request *req)
 	struct fs_fid *file;
 	struct passwd *pwd;
 	struct stat st;
+	struct r_pgdata udata;
 	uint32_t n_uname;
 	gid_t *gids;
 	uid_t uid;
@@ -830,13 +864,17 @@ fs_attach(void *softc, struct l9p_request *req)
 	n_uname = req->lr_req.tattach.n_uname;
 	if (n_uname != L9P_NONUNAME) {
 		uid = (uid_t)n_uname;
-		pwd = getpwuid(uid);
+		pwd = fs_getpwuid(sc, uid, &udata);
 		if (pwd == NULL)
 			L9P_LOG(L9P_DEBUG,
 			    "Tattach: uid %ld: no such user", (long)uid);
 	} else {
 		uid = (uid_t)-1;
+#if defined(WITH_CASPER)
+		pwd = cap_getpwnam(sc->fs_cappwd, req->lr_req.tattach.uname);
+#else
 		pwd = getpwnam(req->lr_req.tattach.uname);
+#endif
 		if (pwd == NULL)
 			L9P_LOG(L9P_DEBUG,
 			    "Tattach: %s: no such user",
@@ -1578,13 +1616,15 @@ fs_lstatat(struct fs_fid *file, char *name, struct stat *st)
 }
 
 static int
-fs_read(void *softc __unused, struct l9p_request *req)
+fs_read(void *softc, struct l9p_request *req)
 {
 	struct l9p_stat l9stat;
+	struct fs_softc *sc;
 	struct fs_fid *file;
 	bool dotu = req->lr_conn->lc_version >= L9P_2000U;
 	ssize_t ret;
 
+	sc = softc;
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
 
@@ -1618,7 +1658,7 @@ fs_read(void *softc __unused, struct l9p_request *req)
 				break;
 			if (fs_lstatat(file, d->d_name, &st))
 				continue;
-			dostat(&l9stat, d->d_name, &st, dotu);
+			dostat(sc, &l9stat, d->d_name, &st, dotu);
 			if (l9p_pack_stat(&msg, req, &l9stat) != 0) {
 				seekdir(file->ff_dir, o);
 				break;
@@ -1692,12 +1732,14 @@ fs_remove(void *softc, struct l9p_fid *fid)
 }
 
 static int
-fs_stat(void *softc __unused, struct l9p_request *req)
+fs_stat(void *softc, struct l9p_request *req)
 {
+	struct fs_softc *sc;
 	struct fs_fid *file;
 	struct stat st;
 	bool dotu = req->lr_conn->lc_version >= L9P_2000U;
 
+	sc = softc;
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
@@ -1705,7 +1747,7 @@ fs_stat(void *softc __unused, struct l9p_request *req)
 	    AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 
-	dostat(&req->lr_resp.rstat.stat, file->ff_name, &st, dotu);
+	dostat(sc, &req->lr_resp.rstat.stat, file->ff_name, &st, dotu);
 	return (0);
 }
 
@@ -2899,6 +2941,9 @@ l9p_backend_fs_init(struct l9p_backend **backendp, int rootfd)
 	struct fs_softc *sc;
 	const char *rroot;
 	int error;
+#if defined(WITH_CASPER)
+	cap_channel_t *capcas;
+#endif
 
 	if (!fs_attach_mutex_inited) {
 		error = pthread_mutex_init(&fs_attach_mutex, NULL);
@@ -2946,7 +2991,25 @@ l9p_backend_fs_init(struct l9p_backend **backendp, int rootfd)
 	sc->fs_readonly = false;
 	backend->softc = sc;
 
+#if defined(WITH_CASPER)
+	capcas = cap_init();
+	if (capcas == NULL)
+		return (-1);
+
+	sc->fs_cappwd = cap_service_open(capcas, "system.pwd");
+	if (sc->fs_cappwd == NULL)
+		return (-1);
+
+	sc->fs_capgrp = cap_service_open(capcas, "system.grp");
+	if (sc->fs_capgrp == NULL)
+		return (-1);
+
+	cap_setpassent(sc->fs_cappwd, 1);
+	cap_setgroupent(sc->fs_capgrp, 1);
+	cap_close(capcas);
+#else
 	setpassent(1);
+#endif
 
 	*backendp = backend;
 	return (0);

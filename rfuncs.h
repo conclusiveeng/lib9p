@@ -32,6 +32,10 @@
 #include <pwd.h>
 #include <string.h>
 
+#if defined(WITH_CASPER)
+#include <libcasper.h>
+#endif
+
 /*
  * Reentrant, optionally-malloc-ing versions of
  * basename() and dirname().
@@ -66,5 +70,10 @@ struct r_pgdata {
 void r_pgfree(struct r_pgdata *);
 struct passwd *r_getpwuid(uid_t, struct r_pgdata *);
 struct group *r_getgrgid(gid_t, struct r_pgdata *);
+
+#if defined(WITH_CASPER)
+struct passwd *r_cap_getpwuid(cap_channel_t *, uid_t, struct r_pgdata *);
+struct group *r_cap_getgrgid(cap_channel_t *, gid_t, struct r_pgdata *);
+#endif
 
 #endif	/* LIB9P_RFUNCS_H */

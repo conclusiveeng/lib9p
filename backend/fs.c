@@ -60,6 +60,7 @@
 #if defined(WITH_CASPER)
   #include <libcasper.h>
   #include <casper/cap_pwd.h>
+  #include <casper/cap_grp.h>
 #endif
 
 #if defined(__FreeBSD__)
@@ -175,7 +176,8 @@ static void dostatfs(struct l9p_statfs *, struct statfs *, long);
 static void fillacl(struct fs_fid *ff);
 static struct l9p_acl *getacl(struct fs_fid *ff, int fd, const char *path);
 static void dropacl(struct fs_fid *ff);
-static struct l9p_acl *look_for_nfsv4_acl(int fd, const char *path);
+static struct l9p_acl *look_for_nfsv4_acl(struct fs_fid *ff, int fd,
+    const char *path);
 static int check_access(int32_t,
     struct l9p_acl *, struct stat *, struct l9p_acl *, struct stat *,
     struct fs_authinfo *, gid_t);
@@ -225,9 +227,9 @@ static int fs_fsync(void *, struct l9p_request *);
 static int fs_lock(void *, struct l9p_request *);
 static int fs_getlock(void *, struct l9p_request *);
 static int fs_link(void *, struct l9p_request *);
-static int fs_renameat(void *softc, struct l9p_request *req);
-static int fs_unlinkat(void *softc, struct l9p_request *req);
-static void fs_freefid(void *softc, struct l9p_fid *f);
+static int fs_renameat(void *, struct l9p_request *);
+static int fs_unlinkat(void *, struct l9p_request *);
+static void fs_freefid(void *, struct l9p_fid *);
 
 /*
  * Convert from 9p2000 open/create mode to Unix-style O_* flags.
@@ -717,7 +719,7 @@ fillacl(struct fs_fid *ff)
 {
 
 	if (ff->ff_acl == NULL && (ff->ff_flags & FF_NO_NFSV4_ACL) == 0) {
-		ff->ff_acl = look_for_nfsv4_acl(ff->ff_fd, ff->ff_name);
+		ff->ff_acl = look_for_nfsv4_acl(ff, ff->ff_fd, ff->ff_name);
 		if (ff->ff_acl == NULL)
 			ff->ff_flags |= FF_NO_NFSV4_ACL;
 	}
@@ -737,7 +739,7 @@ getacl(struct fs_fid *ff, int fd, const char *path)
 
 	if (ff->ff_flags & FF_NO_NFSV4_ACL)
 		return (NULL);
-	return look_for_nfsv4_acl(fd, path);
+	return look_for_nfsv4_acl(ff, fd, path);
 }
 
 /*
@@ -759,31 +761,33 @@ dropacl(struct fs_fid *ff)
  * to use the path.
  */
 static struct l9p_acl *
-look_for_nfsv4_acl(int fd, const char *path)
+look_for_nfsv4_acl(struct fs_fid *ff, int fd, const char *path)
 {
 	struct l9p_acl *acl;
 	acl_t sysacl;
+	int doclose = 0;
 
-	if (fd >= 0)
-		sysacl = acl_get_fd_np(fd, ACL_TYPE_NFS4);
-	else
-		sysacl = acl_get_link_np(path, ACL_TYPE_NFS4);
+	if (fd < 0) {
+		fd = openat(ff->ff_dirfd, path, 0);
+		doclose = 1;
+	}
+
+	sysacl = acl_get_fd_np(fd, ACL_TYPE_NFS4);
 	if (sysacl == NULL) {
 		/*
 		 * EINVAL means no NFSv4 ACLs apply for this file.
 		 * Other error numbers indicate some kind of problem.
 		 */
 		if (errno != EINVAL) {
-			if (fd >= 0)
-				L9P_LOG(L9P_ERROR,
-				    "error retrieving NFSv4 ACL from "
-				    "fdesc %d (%s): %s", fd,
-				    path, strerror(errno));
-			else
-				L9P_LOG(L9P_ERROR,
-				    "error retrieving NFSv4 ACL from %s: %s",
-				    path, strerror(errno));
+			L9P_LOG(L9P_ERROR,
+			    "error retrieving NFSv4 ACL from "
+			    "fdesc %d (%s): %s", fd,
+			    path, strerror(errno));
 		}
+
+		if (doclose)
+			close(fd);
+
 		return (NULL);
 	}
 #if defined(HAVE_FREEBSD_ACLS)
@@ -792,6 +796,10 @@ look_for_nfsv4_acl(int fd, const char *path)
 	acl = NULL; /* XXX need a l9p_darwin_acl_to_acl */
 #endif
 	acl_free(sysacl);
+
+	if (doclose)
+		close(fd);
+
 	return (acl);
 }
 
@@ -828,11 +836,10 @@ check_access(int32_t opmask,
 	args.aca_pstat = pst;
 	args.aca_child = cacl;
 	args.aca_cstat = cst;
-	if (pacl == NULL && cacl == NULL) {
-		args.aca_aclmode = L9P_ACM_STAT_MODE;
-	} else {
-		args.aca_aclmode = L9P_ACM_NFS_ACL | L9P_ACM_ZFS_ACL;
-	}
+	args.aca_aclmode = pacl == NULL && cacl == NULL
+	    ? L9P_ACM_STAT_MODE
+	    : L9P_ACM_NFS_ACL | L9P_ACM_ZFS_ACL;
+
 	args.aca_superuser = true;
 	return (l9p_acl_check_access(opmask, &args));
 }
@@ -1059,6 +1066,7 @@ fs_create(void *softc, struct l9p_request *req)
 
 	if (error == 0)
 		generate_qid(&st, &req->lr_resp.rcreate.qid);
+
 	return (error);
 }
 
@@ -1114,6 +1122,8 @@ fs_icreate(void *softc, struct l9p_fid *dir, char *name, int flags,
 	char newname[MAXPATHLEN];
 	int error, fd;
 
+	file = dir->lo_aux;
+
 	/*
 	 * Build full path name from directory + file name.  We'll
 	 * check permissions on the parent directory, then race to
@@ -1162,7 +1172,6 @@ fs_icreate(void *softc, struct l9p_fid *dir, char *name, int flags,
 	}
 
 	/* It *was* a directory; now it's a file, and it's open. */
-	file = dir->lo_aux;
 	free(file->ff_name);
 	file->ff_name = name;
 	file->ff_fd = fd;
@@ -1365,7 +1374,7 @@ fs_imknod(void *softc, struct l9p_fid *dir, char *name,
 		perm = mode & 0777;
 	}
 
-	if (mknod(newname, mode, dev) != 0)
+	if (mknodat(ff->ff_dirfd, newname, mode, dev) != 0)
 		return (errno);
 
 	/* We cannot open the new name; race to use l* syscalls. */
@@ -1557,7 +1566,7 @@ fs_isymlink(void *softc, struct l9p_fid *dir, char *name,
 	if (error)
 		return (error);
 
-	if (symlink(symtgt, newname) != 0)
+	if (symlinkat(symtgt, ff->ff_dirfd, newname) != 0)
 		return (errno);
 
 	/* We cannot open the new name; race to use l* syscalls. */
@@ -2103,6 +2112,7 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	struct statfs f;
 	long name_max;
 	int error;
+	int fd;
 
 	file = req->lr_fid->lo_aux;
 	assert(file);
@@ -2120,12 +2130,19 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	if (error)
 		return (error);
 
-	if (statfs(file->ff_name, &f) != 0)
+	fd = openat(file->ff_dirfd, file->ff_name, 0);
+	if (fd < 0)
 		return (errno);
 
-	name_max = pathconf(file->ff_name, _PC_NAME_MAX);
-	if (name_max == -1)
+	if (fstatfs(fd, &f) != 0)
 		return (errno);
+
+	name_max = fpathconf(fd, _PC_NAME_MAX);
+	error = errno;
+	close(fd);
+
+	if (name_max == -1)
+		return (error);
 
 	dostatfs(&req->lr_resp.rstatfs.statfs, &f, name_max);
 
@@ -2476,7 +2493,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 {
 	uint64_t mask;
 	struct fs_softc *sc = softc;
-	struct timeval tv[2];
+	struct timespec ts[2];
 	struct fs_fid *file;
 	struct stat st;
 	int error = 0;
@@ -2513,10 +2530,14 @@ fs_setattr(void *softc, struct l9p_request *req)
 	}
 
 	if (mask & (L9PL_SETATTR_UID | L9PL_SETATTR_GID)) {
-		uid = mask & L9PL_SETATTR_UID ? req->lr_req.tsetattr.uid :
-		    (uid_t)-1;
-		gid = mask & L9PL_SETATTR_GID ? req->lr_req.tsetattr.gid :
-		    (gid_t)-1;
+		uid = mask & L9PL_SETATTR_UID
+		    ? req->lr_req.tsetattr.uid
+		    : (uid_t)-1;
+
+		gid = mask & L9PL_SETATTR_GID
+		    ? req->lr_req.tsetattr.gid
+		    : (gid_t)-1;
+
 		if (fchownat(file->ff_dirfd, file->ff_name, uid, gid,
 		    AT_SYMLINK_NOFOLLOW)) {
 			error = errno;
@@ -2526,45 +2547,47 @@ fs_setattr(void *softc, struct l9p_request *req)
 
 	if (mask & L9PL_SETATTR_SIZE) {
 		/* Truncate follows symlinks, is this OK? */
-		if (truncate(file->ff_name, (off_t)req->lr_req.tsetattr.size)) {
+		int fd = openat(file->ff_dirfd, file->ff_name, O_RDWR);
+		if (ftruncate(fd, (off_t)req->lr_req.tsetattr.size)) {
 			error = errno;
+			(void) close(fd);
 			goto out;
 		}
+		(void) close(fd);
 	}
 
 	if (mask & (L9PL_SETATTR_ATIME | L9PL_SETATTR_MTIME)) {
-		tv[0].tv_sec = st.st_atimespec.tv_sec;
-		tv[0].tv_usec = (int)st.st_atimespec.tv_nsec / 1000;
-		tv[1].tv_sec = st.st_mtimespec.tv_sec;
-		tv[1].tv_usec = (int)st.st_mtimespec.tv_nsec / 1000;
+		ts[0].tv_sec = st.st_atimespec.tv_sec;
+		ts[0].tv_nsec = st.st_atimespec.tv_nsec;
+		ts[1].tv_sec = st.st_mtimespec.tv_sec;
+		ts[1].tv_nsec = st.st_mtimespec.tv_nsec;
 
 		if (mask & L9PL_SETATTR_ATIME) {
 			if (mask & L9PL_SETATTR_ATIME_SET) {
-				tv[0].tv_sec =
-				    (long)req->lr_req.tsetattr.atime_sec;
-				tv[0].tv_usec =
-				    (int)req->lr_req.tsetattr.atime_nsec / 1000;
+				ts[0].tv_sec = req->lr_req.tsetattr.atime_sec;
+				ts[0].tv_nsec = req->lr_req.tsetattr.atime_nsec;
 			} else {
-				if (gettimeofday(&tv[0], NULL)) {
+				if (clock_gettime(CLOCK_REALTIME, &ts[0]) != 0) {
 					error = errno;
 					goto out;
 				}
 			}
 		}
+
 		if (mask & L9PL_SETATTR_MTIME) {
 			if (mask & L9PL_SETATTR_MTIME_SET) {
-				tv[1].tv_sec =
-				    (long)req->lr_req.tsetattr.mtime_sec;
-				tv[1].tv_usec =
-				    (int)req->lr_req.tsetattr.mtime_nsec / 1000;
+				ts[1].tv_sec = req->lr_req.tsetattr.mtime_sec;
+				ts[1].tv_nsec = req->lr_req.tsetattr.mtime_nsec;
 			} else {
-				if (gettimeofday(&tv[1], NULL)) {
+				if (clock_gettime(CLOCK_REALTIME, &ts[1]) != 0) {
 					error = errno;
 					goto out;
 				}
 			}
 		}
-		if (lutimes(file->ff_name, tv)) {
+
+		if (utimensat(file->ff_dirfd, file->ff_name, ts,
+		    AT_SYMLINK_NOFOLLOW)) {
 			error = errno;
 			goto out;
 		}
@@ -2748,10 +2771,12 @@ fs_link(void *softc __unused, struct l9p_request *req)
 	if (error)
 		return (error);
 
-	if (link(file->ff_name, newname) != 0)
+	if (linkat(file->ff_dirfd, file->ff_name, file->ff_dirfd,
+	    newname, 0) != 0)
 		error = errno;
 	else
 		dropacl(file);
+
 	return (error);
 }
 
@@ -2885,10 +2910,10 @@ fs_unlinkat(void *softc, struct l9p_request *req)
 		return (error);
 
 	if (req->lr_req.tunlinkat.flags & L9PL_AT_REMOVEDIR) {
-		if (rmdir(newname) != 0)
+		if (unlinkat(dirff->ff_dirfd, newname, AT_REMOVEDIR) != 0)
 			error = errno;
 	} else {
-		if (unlink(newname) != 0)
+		if (unlinkat(dirff->ff_dirfd, newname, 0) != 0)
 			error = errno;
 	}
 	return (error);

@@ -82,12 +82,13 @@
 #endif
 
 struct fs_softc {
-	const char *fs_rootpath;
-	bool fs_readonly;
+	int 	fs_rootfd;
+	bool	fs_readonly;
 };
 
 struct fs_fid {
 	DIR	*ff_dir;
+	int	ff_dirfd;
 	int	ff_fd;
 	int	ff_flags;
 	char	*ff_name;
@@ -156,7 +157,7 @@ static int fs_oflags_dotu(int, int *);
 static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
 static int fs_nde(struct fs_softc *, struct l9p_fid *, bool, gid_t,
     struct stat *, uid_t *, gid_t *);
-static struct fs_fid *open_fid(const char *, struct fs_authinfo *, bool);
+static struct fs_fid *open_fid(int, const char *, struct fs_authinfo *, bool);
 static void dostat(struct l9p_stat *, char *, struct stat *, bool dotu);
 static void dostatfs(struct l9p_statfs *, struct statfs *, long);
 static void fillacl(struct fs_fid *ff);
@@ -438,12 +439,10 @@ fs_pdir(struct fs_softc *sc, struct l9p_fid *fid, char *buf, size_t size,
 	ff = fid->lo_aux;
 	assert(ff != NULL);
 	path = ff->ff_name;
-	if (strcmp(path, sc->fs_rootpath) == 0)
-		return (EINVAL);
 	path = r_dirname(path, buf, size);
 	if (path == NULL)
 		return (ENAMETOOLONG);
-	if (lstat(path, st) != 0)
+	if (fstatat(ff->ff_dirfd, path, st, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 	if (!S_ISDIR(st->st_mode))
 		return (ENOTDIR);
@@ -501,7 +500,8 @@ fs_nde(struct fs_softc *sc, struct l9p_fid *dir, bool isdir, gid_t egid,
 		return (EROFS);
 	dirf = dir->lo_aux;
 	assert(dirf != NULL);
-	if (lstat(dirf->ff_name, st) != 0)
+	if (fstatat(dirf->ff_dirfd, dirf->ff_name, st,
+	    AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 	if (!S_ISDIR(st->st_mode))
 		return (ENOTDIR);
@@ -526,7 +526,7 @@ fs_nde(struct fs_softc *sc, struct l9p_fid *dir, bool isdir, gid_t egid,
  * we gain a reference.
  */
 static struct fs_fid *
-open_fid(const char *path, struct fs_authinfo *ai, bool creating)
+open_fid(int dirfd, const char *path, struct fs_authinfo *ai, bool creating)
 {
 	struct fs_fid *ret;
 	uint32_t newcount;
@@ -539,6 +539,7 @@ open_fid(const char *path, struct fs_authinfo *ai, bool creating)
 		return (NULL);
 	}
 	ret->ff_fd = -1;
+	ret->ff_dirfd = dirfd;
 	ret->ff_name = strdup(path);
 	if (ret->ff_name == NULL) {
 		pthread_mutex_destroy(&ret->ff_mtx);
@@ -856,7 +857,7 @@ fs_attach(void *softc, struct l9p_request *req)
 		error = EPERM;
 	else {
 		error = 0;
-		if (lstat(sc->fs_rootpath, &st) != 0)
+		if (fstat(sc->fs_rootfd, &st) != 0)
 			error = errno;
 		else if (!S_ISDIR(st.st_mode))
 			error = ENOTDIR;
@@ -864,8 +865,8 @@ fs_attach(void *softc, struct l9p_request *req)
 	if (error) {
 		pthread_mutex_unlock(&fs_attach_mutex);
 		L9P_LOG(L9P_DEBUG,
-		    "Tattach: denying uid=%ld access to \"%s\": %s",
-		    (long)uid, sc->fs_rootpath, strerror(error));
+		    "Tattach: denying uid=%ld access to rootdir: %s",
+		    (long)uid, strerror(error));
 		/*
 		 * Pass ENOENT and ENOTDIR through for diagnosis;
 		 * others become EPERM.  This should not leak too
@@ -910,7 +911,7 @@ fs_attach(void *softc, struct l9p_request *req)
 	memcpy(ai->ai_gids, gids, (size_t)ngroups * sizeof(gid_t));
 	free(gids);
 
-	file = open_fid(sc->fs_rootpath, ai, true);
+	file = open_fid(sc->fs_rootfd, ".", ai, true);
 	if (file == NULL) {
 		pthread_mutex_destroy(&ai->ai_mtx);
 		free(ai);
@@ -1104,7 +1105,7 @@ fs_icreate(void *softc, struct l9p_fid *dir, char *name, int flags,
 		perm = fs_p9perm(perm, st->st_mode, false);
 
 	/* Create is always exclusive so O_TRUNC is irrelevant. */
-	fd = open(newname, flags | O_CREAT | O_EXCL, perm);
+	fd = openat(file->ff_dirfd, newname, flags | O_CREAT | O_EXCL, perm);
 	if (fd < 0) {
 		error = errno;
 		free(name);
@@ -1182,7 +1183,7 @@ fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
 	assert(file != NULL);
 	name = file->ff_name;
 
-	if (lstat(name, &first) != 0)
+	if (fstatat(file->ff_dirfd, name, &first, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 	if (S_ISLNK(first.st_mode))
 		return (EPERM);
@@ -1211,13 +1212,14 @@ fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
 		/* Forbid write or truncate on directory. */
 		if ((flags & O_ACCMODE) != O_RDONLY || (flags & O_TRUNC))
 			return (EPERM);
-		dirp = opendir(name);
+		fd = openat(file->ff_dirfd, name, O_DIRECTORY);
+		dirp = fdopendir(fd);
 		if (dirp == NULL)
 			return (EPERM);
 		fd = dirfd(dirp);
 	} else {
 		dirp = NULL;
-		fd = open(name, flags);
+		fd = openat(file->ff_dirfd, name, flags);
 		if (fd < 0)
 			return (EPERM);
 	}
@@ -1257,11 +1259,13 @@ static int
 fs_imkdir(void *softc, struct l9p_fid *dir, char *name,
     bool isp9, mode_t perm, gid_t egid, struct stat *st)
 {
+	struct fs_fid *ff;
 	gid_t gid;
 	uid_t uid;
 	char newname[MAXPATHLEN];
 	int error, fd;
 
+	ff = dir->lo_aux;
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
@@ -1273,10 +1277,11 @@ fs_imkdir(void *softc, struct l9p_fid *dir, char *name,
 	if (isp9)
 		perm = fs_p9perm(perm, st->st_mode, true);
 
-	if (mkdir(newname, perm) != 0)
+	if (mkdirat(ff->ff_dirfd, newname, perm) != 0)
 		return (errno);
 
-	fd = open(newname, O_DIRECTORY | O_RDONLY | O_NOFOLLOW);
+	fd = openat(ff->ff_dirfd, newname,
+	    O_DIRECTORY | O_RDONLY | O_NOFOLLOW);
 	if (fd < 0 ||
 	    fchown(fd, uid, gid) != 0 ||
 	    fchmod(fd, perm) != 0 ||
@@ -1299,12 +1304,14 @@ static int
 fs_imknod(void *softc, struct l9p_fid *dir, char *name,
     bool isp9, mode_t mode, dev_t dev, gid_t egid, struct stat *st)
 {
+	struct fs_fid *ff;
 	mode_t perm;
 	gid_t gid;
 	uid_t uid;
 	char newname[MAXPATHLEN];
 	int error;
 
+	ff = dir->lo_aux;
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
@@ -1324,9 +1331,9 @@ fs_imknod(void *softc, struct l9p_fid *dir, char *name,
 		return (errno);
 
 	/* We cannot open the new name; race to use l* syscalls. */
-	if (lchown(newname, uid, gid) != 0 ||
-	    lchmod(newname, perm) != 0 ||
-	    lstat(newname, st) != 0)
+	if (fchownat(ff->ff_dirfd, newname, uid, gid, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    fchmodat(ff->ff_dirfd, newname, perm, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    fstatat(ff->ff_dirfd, newname, st, AT_SYMLINK_NOFOLLOW) != 0)
 		error = errno;
 	else if ((st->st_mode & S_IFMT) != (mode & S_IFMT))
 		error = EPERM;		/* ??? lost a race anyway */
@@ -1343,11 +1350,13 @@ static int
 fs_imkfifo(void *softc, struct l9p_fid *dir, char *name,
     bool isp9, mode_t perm, gid_t egid, struct stat *st)
 {
+	struct fs_fid *ff;
 	gid_t gid;
 	uid_t uid;
 	char newname[MAXPATHLEN];
 	int error;
 
+	ff = dir->lo_aux;
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
@@ -1363,9 +1372,9 @@ fs_imkfifo(void *softc, struct l9p_fid *dir, char *name,
 		return (errno);
 
 	/* We cannot open the new name; race to use l* syscalls. */
-	if (lchown(newname, uid, gid) != 0 ||
-	    lchmod(newname, perm) != 0 ||
-	    lstat(newname, st) != 0)
+	if (fchownat(ff->ff_dirfd, newname, uid, gid, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    fchmodat(ff->ff_dirfd, newname, perm, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    fstatat(ff->ff_dirfd, newname, st, AT_SYMLINK_NOFOLLOW) != 0)
 		error = errno;
 	else if (!S_ISFIFO(st->st_mode))
 		error = EPERM;		/* ??? lost a race anyway */
@@ -1385,6 +1394,7 @@ static int
 fs_imksocket(void *softc, struct l9p_fid *dir, char *name,
     bool isp9, mode_t perm, gid_t egid, struct stat *st)
 {
+	struct fs_fid *ff;
 	struct sockaddr_un sun;
 	char *path;
 	char newname[MAXPATHLEN];
@@ -1392,6 +1402,7 @@ fs_imksocket(void *softc, struct l9p_fid *dir, char *name,
 	uid_t uid;
 	int error = 0, s, fd;
 
+	ff = dir->lo_aux;
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
@@ -1412,9 +1423,8 @@ fs_imksocket(void *softc, struct l9p_fid *dir, char *name,
 #ifdef HAVE_BINDAT
 	/* Try bindat() if needed. */
 	if (strlen(path) >= sizeof(sun.sun_path)) {
-		struct fs_fid *file = dir->lo_aux;
-
-		fd = open(file->ff_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+		fd = openat(ff->ff_dirfd, ff->ff_name,
+		    O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
 		if (fd >= 0)
 			path = name;
 	}
@@ -1457,9 +1467,9 @@ out:
 		 * fstat() on the socket descriptor: it succeeds,
 		 * but we get bogus data!
 		 */
-		if (lchown(newname, uid, gid) != 0 ||
-		    lchmod(newname, perm) != 0 ||
-		    lstat(newname, st) != 0)
+		if (fchownat(ff->ff_dirfd, newname, uid, gid, AT_SYMLINK_NOFOLLOW) != 0 ||
+		    fchmodat(ff->ff_dirfd, newname, perm, AT_SYMLINK_NOFOLLOW) != 0 ||
+		    fstatat(ff->ff_dirfd, newname, st, AT_SYMLINK_NOFOLLOW) != 0)
 			error = errno;
 		else if (!S_ISSOCK(st->st_mode))
 			error = EPERM;		/* ??? lost a race anyway */
@@ -1494,11 +1504,13 @@ static int
 fs_isymlink(void *softc, struct l9p_fid *dir, char *name,
     char *symtgt, gid_t egid, struct stat *st)
 {
+	struct fs_fid *ff;
 	gid_t gid;
 	uid_t uid;
 	char newname[MAXPATHLEN];
 	int error;
 
+	ff = dir->lo_aux;
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
@@ -1511,8 +1523,8 @@ fs_isymlink(void *softc, struct l9p_fid *dir, char *name,
 		return (errno);
 
 	/* We cannot open the new name; race to use l* syscalls. */
-	if (lchown(newname, uid, gid) != 0 ||
-	    lstat(newname, st) != 0)
+	if (fchownat(ff->ff_dirfd, newname, uid, gid, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    fstatat(ff->ff_dirfd, newname, st, AT_SYMLINK_NOFOLLOW) != 0)
 		error = errno;
 	else if (!S_ISLNK(st->st_mode))
 		error = EPERM;		/* ??? lost a race anyway */
@@ -1660,7 +1672,7 @@ fs_remove(void *softc, struct l9p_fid *fid)
 		return (error);
 
 	file = fid->lo_aux;
-	if (lstat(file->ff_name, &cst) != 0)
+	if (fstatat(file->ff_dirfd, file->ff_name, &cst, AT_SYMLINK_NOFOLLOW) != 0)
 		return (error);
 
 	parent_acl = getacl(file, -1, dirname);
@@ -1672,13 +1684,9 @@ fs_remove(void *softc, struct l9p_fid *fid)
 	if (error)
 		return (error);
 
-	if (S_ISDIR(cst.st_mode)) {
-		if (rmdir(file->ff_name) != 0)
-			error = errno;
-	} else {
-		if (unlink(file->ff_name) != 0)
-			error = errno;
-	}
+	if (unlinkat(file->ff_dirfd, file->ff_name,
+	    S_ISDIR(cst.st_mode) ? AT_REMOVEDIR : 0) != 0)
+		error = errno;
 
 	return (error);
 }
@@ -1693,9 +1701,11 @@ fs_stat(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	lstat(file->ff_name, &st);
-	dostat(&req->lr_resp.rstat.stat, file->ff_name, &st, dotu);
+	if (fstatat(file->ff_dirfd, file->ff_name, &st,
+	    AT_SYMLINK_NOFOLLOW) != 0)
+		return (errno);
 
+	dostat(&req->lr_resp.rstat.stat, file->ff_name, &st, dotu);
 	return (0);
 }
 
@@ -1751,10 +1761,10 @@ fs_walk(void *softc, struct l9p_request *req)
 	namelen = strlcpy(succ, file->ff_name, MAXPATHLEN);
 	if (namelen >= MAXPATHLEN)
 		return (ENAMETOOLONG);
-	if (lstat(succ, &st) < 0)
+	if (fstatat(file->ff_dirfd, succ, &st, AT_SYMLINK_NOFOLLOW) < 0)
 		return (errno);
 	ai = file->ff_ai;
-	atroot = strcmp(succ, sc->fs_rootpath) == 0;
+	atroot = strlen(succ) == 0; /* XXX? */
 	fillacl(file);
 	acl = file->ff_acl;
 
@@ -1823,7 +1833,7 @@ fs_walk(void *softc, struct l9p_request *req)
 			}
 			(void) r_dirname(succ, next, MAXPATHLEN);
 			namelen = strlen(next);
-			atroot = strcmp(next, sc->fs_rootpath) == 0;
+			atroot = strlen(next) == 0; /* XXX? */
 		} else {
 			need = namelen + 1 + clen + 1;
 			if (need > MAXPATHLEN) {
@@ -1841,7 +1851,7 @@ fs_walk(void *softc, struct l9p_request *req)
 			atroot = false;
 		}
 
-		if (lstat(next, &st) < 0) {
+		if (fstatat(file->ff_dirfd, next, &st, AT_SYMLINK_NOFOLLOW) < 0) {
 			error = ENOENT;
 			break;
 		}
@@ -1870,7 +1880,7 @@ fs_walk(void *softc, struct l9p_request *req)
 		error = 0;
 	}
 
-	newfile = open_fid(succ, ai, false);
+	newfile = open_fid(file->ff_dirfd, succ, ai, false);
 	if (newfile == NULL) {
 		error = ENOMEM;
 		goto out;
@@ -1987,14 +1997,16 @@ fs_wstat(void *softc, struct l9p_request *req)
 	}
 
 	if (req->lr_conn->lc_version >= L9P_2000U) {
-		if (lchown(file->ff_name, l9stat->n_uid, l9stat->n_gid) != 0) {
+		if (fchownat(file->ff_dirfd, file->ff_name, l9stat->n_uid,
+		    l9stat->n_gid, AT_SYMLINK_NOFOLLOW) != 0) {
 			error = errno;
 			goto out;
 		}
 	}
 
 	if (l9stat->mode != (uint32_t)~0) {
-		if (chmod(file->ff_name, l9stat->mode & 0777) != 0) {
+		if (fchmodat(file->ff_dirfd, file->ff_name,
+		    l9stat->mode & 0777, 0) != 0) {
 			error = errno;
 			goto out;
 		}
@@ -2053,7 +2065,7 @@ fs_statfs(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	if (lstat(file->ff_name, &st) != 0)
+	if (fstatat(file->ff_dirfd, file->ff_name, &st, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 
 	/*
@@ -2236,7 +2248,7 @@ fs_rename(void *softc, struct l9p_request *req)
 	fillacl(file);
 	fillacl(f2ff);
 
-	if (lstat(file->ff_name, &cst) != 0)
+	if (fstatat(file->ff_dirfd, file->ff_name, &cst, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 
 	/*
@@ -2258,7 +2270,7 @@ fs_rename(void *softc, struct l9p_request *req)
 	 * for dir write permission if not reparenting -- but that's just
 	 * add-file/add-subdir, which means doing this always.)
 	 */
-	if (lstat(f2ff->ff_name, &npst) != 0)
+	if (fstatat(f2ff->ff_dirfd, f2ff->ff_name, &npst, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 	op = S_ISDIR(cst.st_mode) ? L9P_ACE_ADD_SUBDIRECTORY : L9P_ACE_ADD_FILE;
 	error = check_access(op, f2ff->ff_acl, &npst, NULL, NULL,
@@ -2305,7 +2317,7 @@ fs_readlink(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file);
 
-	linklen = readlink(file->ff_name, buf, sizeof(buf));
+	linklen = readlinkat(file->ff_dirfd, file->ff_name, buf, sizeof(buf));
 	if (linklen < 0)
 		error = errno;
 	else if ((size_t)linklen >= sizeof(buf))
@@ -2328,7 +2340,7 @@ fs_getattr(void *softc __unused, struct l9p_request *req)
 	assert(file);
 
 	valid = 0;
-	if (lstat(file->ff_name, &st)) {
+	if (fstatat(file->ff_dirfd, file->ff_name, &st, AT_SYMLINK_NOFOLLOW)) {
 		error = errno;
 		goto out;
 	}
@@ -2439,7 +2451,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 	 */
 	mask = req->lr_req.tsetattr.valid;
 
-	if (lstat(file->ff_name, &st)) {
+	if (fstatat(file->ff_dirfd, file->ff_name, &st, AT_SYMLINK_NOFOLLOW)) {
 		error = errno;
 		goto out;
 	}
@@ -2450,7 +2462,9 @@ fs_setattr(void *softc, struct l9p_request *req)
 	}
 
 	if (mask & L9PL_SETATTR_MODE) {
-		if (lchmod(file->ff_name, req->lr_req.tsetattr.mode & 0777)) {
+		if (fchmodat(file->ff_dirfd, file->ff_name,
+		    req->lr_req.tsetattr.mode & 0777,
+		    AT_SYMLINK_NOFOLLOW)) {
 			error = errno;
 			goto out;
 		}
@@ -2461,7 +2475,8 @@ fs_setattr(void *softc, struct l9p_request *req)
 		    (uid_t)-1;
 		gid = mask & L9PL_SETATTR_GID ? req->lr_req.tsetattr.gid :
 		    (gid_t)-1;
-		if (lchown(file->ff_name, uid, gid)) {
+		if (fchownat(file->ff_dirfd, file->ff_name, uid, gid,
+		    AT_SYMLINK_NOFOLLOW)) {
 			error = errno;
 			goto out;
 		}
@@ -2679,8 +2694,8 @@ fs_link(void *softc __unused, struct l9p_request *req)
 	file = req->lr_fid->lo_aux;
 	assert(file != NULL);
 
-	if (lstat(dirf->ff_name, &tdst) != 0 ||
-	    lstat(file->ff_name, &fst) != 0)
+	if (fstatat(dirf->ff_dirfd, dirf->ff_name, &tdst, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    fstatat(file->ff_dirfd, file->ff_name, &fst, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 	if (S_ISDIR(fst.st_mode))
 		return (EISDIR);
@@ -2751,20 +2766,20 @@ fs_renameat(void *softc, struct l9p_request *req)
 	error = fs_buildname(newdir, nnp, nnb, sizeof(nnb));
 	if (error)
 		return (error);
-	if (lstat(onb, &fst) != 0)
+	if (fstatat(off->ff_dirfd, onb, &fst, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 
 	reparenting = olddir != newdir &&
 	    strcmp(off->ff_name, nff->ff_name) != 0;
 
-	if (lstat(off->ff_name, &odst) != 0)
+	if (fstatat(off->ff_dirfd, off->ff_name, &odst, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 	if (!S_ISDIR(odst.st_mode))
 		return (ENOTDIR);
 	fillacl(off);
 
 	if (reparenting) {
-		if (lstat(nff->ff_name, &ndst) != 0)
+		if (fstatat(nff->ff_dirfd, nff->ff_name, &ndst, AT_SYMLINK_NOFOLLOW) != 0)
 			return (errno);
 		if (!S_ISDIR(ndst.st_mode))
 			return (ENOTDIR);
@@ -2816,8 +2831,8 @@ fs_unlinkat(void *softc, struct l9p_request *req)
 	error = fs_buildname(dir, name, newname, sizeof(newname));
 	if (error)
 		return (error);
-	if (lstat(newname, &fst) != 0 ||
-	    lstat(dirff->ff_name, &dirst) != 0)
+	if (fstatat(dirff->ff_dirfd, newname, &fst, AT_SYMLINK_NOFOLLOW) != 0 ||
+	    fstatat(dirff->ff_dirfd, dirff->ff_name, &dirst, AT_SYMLINK_NOFOLLOW) != 0)
 		return (errno);
 	fillacl(dirff);
 	facl = getacl(dirff, -1, newname);
@@ -2878,7 +2893,7 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 }
 
 int
-l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
+l9p_backend_fs_init(struct l9p_backend **backendp, int rootfd)
 {
 	struct l9p_backend *backend;
 	struct fs_softc *sc;
@@ -2893,10 +2908,6 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 		}
 		fs_attach_mutex_inited = true;
 	}
-
-	rroot = realpath(root, NULL);
-	if (rroot == NULL)
-		return (-1);
 
 	backend = l9p_malloc(sizeof(*backend));
 	backend->attach = fs_attach;
@@ -2931,7 +2942,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, const char *root)
 	backend->freefid = fs_freefid;
 
 	sc = l9p_malloc(sizeof(*sc));
-	sc->fs_rootpath = rroot;
+	sc->fs_rootfd = rootfd;
 	sc->fs_readonly = false;
 	backend->softc = sc;
 

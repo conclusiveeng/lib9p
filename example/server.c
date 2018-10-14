@@ -27,6 +27,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 #include <err.h>
 #include <unistd.h>
 #include "../lib9p.h"
@@ -41,6 +42,7 @@ main(int argc, char **argv)
 	char *host = "0.0.0.0";
 	char *port = "564";
 	char *path;
+	int rootfd;
 	int opt;
 
 	while ((opt = getopt(argc, argv, "h:p:")) != -1) {
@@ -61,8 +63,12 @@ usage:
 		errx(1, "Usage: server <path>");
 	}
 	path = argv[optind];
+	rootfd = open(path, O_DIRECTORY);
 
-	if (l9p_backend_fs_init(&fs_backend, path) != 0)
+	if (rootfd < 0)
+		err(1, "cannot open root directory");
+
+	if (l9p_backend_fs_init(&fs_backend, rootfd) != 0)
 		err(1, "cannot init backend");
 
 	if (l9p_server_init(&server, fs_backend) != 0)
@@ -71,6 +77,7 @@ usage:
 	server->ls_max_version = L9P_2000L;
 	if (l9p_start_server(server, host, port))
 		err(1, "l9p_start_server() failed");
+
 	/* XXX - we never get here, l9p_start_server does not return */
 	exit(0);
 }

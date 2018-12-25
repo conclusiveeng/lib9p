@@ -100,7 +100,7 @@ l9p_check_aces(int32_t mask, struct l9p_acl *acl, struct stat *st,
 	uint32_t i;
 	struct l9p_ace *ace;
 #ifdef ACE_DEBUG
-	char *acetype, *allowdeny;
+	const char *acetype, *allowdeny;
 	bool show_tid;
 #endif
 	bool match;

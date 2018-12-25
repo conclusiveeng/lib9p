@@ -559,7 +559,7 @@ l9p_posix_acl_to_acl(acl_t sysacl)
 #endif
 
 #if defined(HAVE_FREEBSD_ACLS)
-int
+static int
 l9p_frombsdnfs4(acl_entry_t sysace, struct l9p_ace *ace)
 {
 	acl_tag_t tag;			/* e.g., USER_OBJ, GROUP, etc */

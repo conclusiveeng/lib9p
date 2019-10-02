@@ -251,7 +251,7 @@ struct l9p_hdr {
 };
 
 struct l9p_qid {
-	enum l9p_qid_type type;
+	uint8_t  type;
 	uint32_t version;
 	uint64_t path;
 };

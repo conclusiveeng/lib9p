@@ -75,6 +75,7 @@
 #endif
 
 #if defined(__APPLE__)
+  #include <sys/syscall.h>
   #include "Availability.h"
   #define ACL_TYPE_NFS4 ACL_TYPE_EXTENDED
 #endif
@@ -1337,6 +1338,21 @@ fs_imkdir(void *softc, struct l9p_fid *dir, char *name,
 	return (error);
 }
 
+#ifdef __APPLE__
+/*
+ * This is an undocumented OS X syscall. It would be best to avoid it,
+ * but there doesn't seem to be another safe way to implement mknodat.
+ * Dear Apple, please implement mknodat before you remove this syscall.
+ */
+static int fs_ifchdir_thread_local(int fd)
+{
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+	return syscall(SYS___pthread_fchdir, fd);
+#pragma clang diagnostic pop
+}
+#endif
+
 /*
  * Internal form of mknod (special device).
  *
@@ -1369,8 +1385,22 @@ fs_imknod(void *softc, struct l9p_fid *dir, char *name,
 		perm = mode & 0777;
 	}
 
+#ifdef __APPLE__
+	if (fs_ifchdir_thread_local(ff->ff_dirfd) < 0) {
+		return -1;
+	}
+	error = mknod(newname, mode, dev);
+	int preserved_errno = errno;
+	/* Stop using the thread-local cwd */
+	fs_ifchdir_thread_local(-1);
+	if (error < 0) {
+		errno = preserved_errno;
+		return errno;
+	}
+#else
 	if (mknodat(ff->ff_dirfd, newname, mode, dev) != 0)
 		return (errno);
+#endif
 
 	/* We cannot open the new name; race to use l* syscalls. */
 	if (fchownat(ff->ff_dirfd, newname, uid, gid, AT_SYMLINK_NOFOLLOW) != 0 ||

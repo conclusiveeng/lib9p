@@ -2951,7 +2951,7 @@ fs_freefid(void *softc __unused, struct l9p_fid *fid)
 }
 
 int
-l9p_backend_fs_init(struct l9p_backend **backendp, int rootfd)
+l9p_backend_fs_init(struct l9p_backend **backendp, int rootfd, bool ro)
 {
 	struct l9p_backend *backend;
 	struct fs_softc *sc;
@@ -3003,7 +3003,7 @@ l9p_backend_fs_init(struct l9p_backend **backendp, int rootfd)
 
 	sc = l9p_malloc(sizeof(*sc));
 	sc->fs_rootfd = rootfd;
-	sc->fs_readonly = false;
+	sc->fs_readonly = ro;
 	backend->softc = sc;
 
 #if defined(WITH_CASPER)

@@ -319,7 +319,9 @@ e2linux(int errnum)
 		[ENOLINK] = LINUX_ENOLINK,
 		[EPROTO] = LINUX_EPROTO,
 		/* ENOTCAPABLE = unmappable? */
+#ifdef ECAPMODE
 		[ECAPMODE] = EPERM,
+#endif
 #ifdef ENOTRECOVERABLE
 		[ENOTRECOVERABLE] = LINUX_ENOTRECOVERABLE,
 #endif

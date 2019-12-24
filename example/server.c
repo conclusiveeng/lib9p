@@ -42,10 +42,11 @@ main(int argc, char **argv)
 	char *host = "0.0.0.0";
 	char *port = "564";
 	char *path;
+	bool ro = false;
 	int rootfd;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "h:p:")) != -1) {
+	while ((opt = getopt(argc, argv, "h:p:r")) != -1) {
 		switch (opt) {
 		case 'h':
 			host = optarg;
@@ -53,22 +54,27 @@ main(int argc, char **argv)
 		case 'p':
 			port = optarg;
 			break;
+		case 'r':
+			ro = true;
+			break;
 		case '?':
 		default:
 			goto usage;
 		}
 	}
+
 	if (optind >= argc) {
 usage:
-		errx(1, "Usage: server <path>");
+		errx(1, "Usage: server [-h <host>] [-p <port>] [-r] <path>");
 	}
+
 	path = argv[optind];
 	rootfd = open(path, O_DIRECTORY);
 
 	if (rootfd < 0)
 		err(1, "cannot open root directory");
 
-	if (l9p_backend_fs_init(&fs_backend, rootfd) != 0)
+	if (l9p_backend_fs_init(&fs_backend, rootfd, ro) != 0)
 		err(1, "cannot init backend");
 
 	if (l9p_server_init(&server, fs_backend) != 0)

@@ -179,7 +179,7 @@ l9p_truncate_iov(struct iovec *iov, size_t niov, size_t length)
 }
 
 /*
- * This wrapper for getgrouplist() that malloc'ed memory, and
+ * This wrapper for getgrouplist() that calloc'ed memory, and
  * papers over FreeBSD vs Mac differences in the getgrouplist()
  * argument types.
  *
@@ -201,9 +201,9 @@ l9p_getgrlist(const char *name, gid_t basegid, int *angroups)
 	 * For now just use NGROUPS_MAX.
 	 */
 	ngroups = NGROUPS_MAX;
-	groups = malloc((size_t)ngroups * sizeof(*groups));
+	groups = calloc((size_t)ngroups, sizeof(*groups));
 #ifdef GETGROUPS_GROUP_TYPE_IS_INT
-	int_groups = groups ? malloc((size_t)ngroups * sizeof(*int_groups)) :
+	int_groups = groups ? calloc((size_t)ngroups, sizeof(*int_groups)) :
 	    NULL;
 	if (int_groups == NULL) {
 		free(groups);
@@ -218,6 +218,7 @@ l9p_getgrlist(const char *name, gid_t basegid, int *angroups)
 	(void) getgrouplist(name, (int)basegid, int_groups, &ngroups);
 	for (i = 0; i < ngroups; i++)
 		groups[i] = (gid_t)int_groups[i];
+	free(int_groups);
 #else
 	(void) getgrouplist(name, basegid, groups, &ngroups);
 #endif

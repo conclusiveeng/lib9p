@@ -2585,8 +2585,8 @@ fs_setattr(void *softc, struct l9p_request *req)
 
 		if (mask & L9PL_SETATTR_ATIME) {
 			if (mask & L9PL_SETATTR_ATIME_SET) {
-				ts[0].tv_sec = req->lr_req.tsetattr.atime_sec;
-				ts[0].tv_nsec = req->lr_req.tsetattr.atime_nsec;
+				ts[0].tv_sec = (time_t)req->lr_req.tsetattr.atime_sec;
+				ts[0].tv_nsec = (long)req->lr_req.tsetattr.atime_nsec;
 			} else {
 				if (clock_gettime(CLOCK_REALTIME, &ts[0]) != 0) {
 					error = errno;
@@ -2597,8 +2597,8 @@ fs_setattr(void *softc, struct l9p_request *req)
 
 		if (mask & L9PL_SETATTR_MTIME) {
 			if (mask & L9PL_SETATTR_MTIME_SET) {
-				ts[1].tv_sec = req->lr_req.tsetattr.mtime_sec;
-				ts[1].tv_nsec = req->lr_req.tsetattr.mtime_nsec;
+				ts[1].tv_sec = (time_t)req->lr_req.tsetattr.mtime_sec;
+				ts[1].tv_nsec = (long)req->lr_req.tsetattr.mtime_nsec;
 			} else {
 				if (clock_gettime(CLOCK_REALTIME, &ts[1]) != 0) {
 					error = errno;

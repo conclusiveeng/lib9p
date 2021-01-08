@@ -159,7 +159,7 @@ static int fs_pdir(struct fs_softc *, struct l9p_fid *, char *, size_t,
     struct stat *st);
 static int fs_dpf(char *, char *, size_t);
 static int fs_oflags_dotu(int, int *);
-static int fs_oflags_dotl(uint32_t, int *, enum l9p_omode *);
+static int fs_oflags_dotl(uint32_t, int *, int *);
 static int fs_nde(struct fs_softc *, struct l9p_fid *, bool, gid_t,
     struct stat *, uid_t *, gid_t *);
 static struct fs_fid *open_fid(int, const char *, struct fs_authinfo *, bool);
@@ -178,7 +178,7 @@ static void generate_qid(struct stat *, struct l9p_qid *);
 
 static int fs_icreate(void *, struct l9p_fid *, char *, int,
     bool, mode_t, gid_t, struct stat *);
-static int fs_iopen(void *, struct l9p_fid *, int, enum l9p_omode,
+static int fs_iopen(void *, struct l9p_fid *, int, int,
     gid_t, struct stat *);
 static int fs_imkdir(void *, struct l9p_fid *, char *,
     bool, mode_t, gid_t, struct stat *);
@@ -326,10 +326,9 @@ fs_oflags_dotu(int mode, int *aflags)
  * We may eventually also set L9P_ORCLOSE for L_O_TMPFILE.
  */
 static int
-fs_oflags_dotl(uint32_t l_mode, int *aflags, enum l9p_omode *ap9)
+fs_oflags_dotl(uint32_t l_mode, int *aflags, int *ap9)
 {
-	int flags;
-	enum l9p_omode p9;
+	int flags, p9;
 #define	CLEAR(theirs)	l_mode &= ~(uint32_t)(theirs)
 #define	CONVERT(theirs, ours) \
 	do { \
@@ -356,7 +355,7 @@ fs_oflags_dotl(uint32_t l_mode, int *aflags, enum l9p_omode *ap9)
 		 * Slightly dirty, but same dirt, really, as
 		 * setting flags from l_mode & O_ACCMODE.
 		 */
-		p9 = (enum l9p_omode)flags;	/* slightly dirty */
+		p9 = flags;	/* slightly dirty */
 	}
 
 	/* turn L_O_TMPFILE into L9P_ORCLOSE in *p9? */
@@ -1048,8 +1047,7 @@ fs_create(void *softc, struct l9p_request *req)
 		error = fs_imknod(softc, dir, name, true, perm, dev,
 		    (gid_t)-1, &st);
 	} else {
-		enum l9p_omode p9;
-		int flags;
+		int flags, p9;
 
 		p9 = req->lr_req.tcreate.mode;
 		error = fs_oflags_dotu(p9, &flags);
@@ -1200,7 +1198,7 @@ fs_icreate(void *softc, struct l9p_fid *dir, char *name, int flags,
  * On successful return, st has been filled in.
  */
 static int
-fs_iopen(void *softc, struct l9p_fid *fid, int flags, enum l9p_omode p9,
+fs_iopen(void *softc, struct l9p_fid *fid, int flags, int p9,
     gid_t egid __unused, struct stat *st)
 {
 	struct fs_softc *sc = softc;
@@ -1611,8 +1609,7 @@ fs_open(void *softc, struct l9p_request *req)
 {
 	struct l9p_fid *fid = req->lr_fid;
 	struct stat st;
-	enum l9p_omode p9;
-	int error, flags;
+	int error, flags, p9;
 
 	p9 = req->lr_req.topen.mode;
 	error = fs_oflags_dotu(p9, &flags);
@@ -2172,9 +2169,8 @@ fs_lopen(void *softc, struct l9p_request *req)
 {
 	struct l9p_fid *fid = req->lr_fid;
 	struct stat st;
-	enum l9p_omode p9;
 	gid_t gid;
-	int error, flags;
+	int error, flags, p9;
 
 	error = fs_oflags_dotl(req->lr_req.tlopen.flags, &flags, &p9);
 	if (error)
@@ -2195,11 +2191,10 @@ fs_lcreate(void *softc, struct l9p_request *req)
 {
 	struct l9p_fid *dir;
 	struct stat st;
-	enum l9p_omode p9;
 	char *name;
 	mode_t perm;
 	gid_t gid;
-	int error, flags;
+	int error, flags, p9;
 
 	dir = req->lr_fid;
 	name = req->lr_req.tlcreate.name;

@@ -1751,8 +1751,19 @@ fs_remove(void *softc, struct l9p_fid *fid)
 		return (error);
 
 	if (unlinkat(file->ff_dirfd, file->ff_name,
-	    S_ISDIR(cst.st_mode) ? AT_REMOVEDIR : 0) != 0)
+	    S_ISDIR(cst.st_mode) ? AT_REMOVEDIR : 0) != 0) {
 		error = errno;
+		/*
+		 * POSIX allows unlinkat() with AT_REMOVEDIR on a non-empty
+		 * directory to return either ENOTEMPTY or EEXIST. illumos
+		 * and Solaris return EEXIST, apparently because System V did
+		 * not have ENOTEMPTY.
+		 * Since Tunlinkat is part of 9P2000.L, which uses Linux
+		 * errnos, translate that here.
+		 */
+		if (error == EEXIST && S_ISDIR(cst.st_mode))
+			error = ENOTEMPTY;
+	}
 
 	return (error);
 }
@@ -2931,8 +2942,19 @@ fs_unlinkat(void *softc, struct l9p_request *req)
 		return (error);
 
 	if (req->lr_req.tunlinkat.flags & L9PL_AT_REMOVEDIR) {
-		if (unlinkat(dirff->ff_dirfd, newname, AT_REMOVEDIR) != 0)
+		if (unlinkat(dirff->ff_dirfd, newname, AT_REMOVEDIR) != 0) {
 			error = errno;
+			/*
+			 * POSIX allows unlinkat() with AT_REMOVEDIR on a
+			 * non-empty directory to return either ENOTEMPTY or
+			 * EEXIST. illumos and Solaris return EEXIST, apparently
+			 * because System V did not have ENOTEMPTY. Since
+			 * Tunlinkat is part of 9P2000.L, which uses Linux
+			 * errnos, translate that here.
+			 */
+			if (error == EEXIST)
+				error = ENOTEMPTY;
+		}
 	} else {
 		if (unlinkat(dirff->ff_dirfd, newname, 0) != 0)
 			error = errno;

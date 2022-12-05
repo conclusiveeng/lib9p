@@ -2409,6 +2409,67 @@ fs_readlink(void *softc __unused, struct l9p_request *req)
 }
 
 static int
+fs_fstat_fid(struct fs_fid *file, struct stat *st)
+{
+	if (file->ff_fd < 0) {
+		return fstatat(file->ff_dirfd, file->ff_name, st, AT_SYMLINK_NOFOLLOW);
+	} else {
+		return fstat(file->ff_fd, st);
+	}
+}
+
+static int
+fs_fchmod_fid(struct fs_fid *file, int mode)
+{
+	if (file->ff_fd < 0) {
+		return fchmodat(file->ff_dirfd, file->ff_name, mode,
+		    AT_SYMLINK_NOFOLLOW);
+	} else {
+		return fchmod(file->ff_fd, mode);
+	}
+}
+
+static int
+fs_fchown_fid(struct fs_fid *file, int uid, int gid)
+{
+	if (file->ff_fd < 0) {
+		return fchownat(file->ff_dirfd, file->ff_name, uid, gid,
+		    AT_SYMLINK_NOFOLLOW);
+	} else {
+		return fchown(file->ff_fd, uid, gid);
+	}
+}
+
+static int
+fs_ftruncate_fid(struct fs_fid *file, off_t length)
+{
+	if (file->ff_fd < 0) {
+		/* Truncate follows symlinks, is this OK? */
+		int fd = openat(file->ff_dirfd, file->ff_name, O_RDWR);
+		int ret = ftruncate(fd, length);
+		int error = errno;
+		(void) close(fd);
+		errno = error;
+		return ret;
+	} else {
+		L9P_LOG(L9P_DEBUG, "calling ftruncate(%d, %lu)", file->ff_fd, length);
+		return ftruncate(file->ff_fd, length);
+	}
+}
+
+static int
+fs_futimens_fid(struct fs_fid *file, const struct timespec times[2])
+{
+	if (file->ff_fd < 0) {
+		return utimensat(file->ff_dirfd, file->ff_name, times,
+		    AT_SYMLINK_NOFOLLOW);
+	} else {
+		return futimens(file->ff_fd, times);
+	}
+}
+
+
+static int
 fs_getattr(void *softc __unused, struct l9p_request *req)
 {
 	uint64_t mask, valid;
@@ -2420,7 +2481,7 @@ fs_getattr(void *softc __unused, struct l9p_request *req)
 	assert(file);
 
 	valid = 0;
-	if (fstatat(file->ff_dirfd, file->ff_name, &st, AT_SYMLINK_NOFOLLOW)) {
+	if (fs_fstat_fid(file, &st)) {
 		error = errno;
 		goto out;
 	}
@@ -2531,7 +2592,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 	 */
 	mask = req->lr_req.tsetattr.valid;
 
-	if (fstatat(file->ff_dirfd, file->ff_name, &st, AT_SYMLINK_NOFOLLOW)) {
+	if (fs_fstat_fid(file, &st)) {
 		error = errno;
 		goto out;
 	}
@@ -2542,9 +2603,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 	}
 
 	if (mask & L9PL_SETATTR_MODE) {
-		if (fchmodat(file->ff_dirfd, file->ff_name,
-		    req->lr_req.tsetattr.mode & 0777,
-		    AT_SYMLINK_NOFOLLOW)) {
+		if (fs_fchmod_fid(file, req->lr_req.tsetattr.mode & 0777)) {
 			error = errno;
 			goto out;
 		}
@@ -2559,22 +2618,17 @@ fs_setattr(void *softc, struct l9p_request *req)
 		    ? req->lr_req.tsetattr.gid
 		    : (gid_t)-1;
 
-		if (fchownat(file->ff_dirfd, file->ff_name, uid, gid,
-		    AT_SYMLINK_NOFOLLOW)) {
+		if (fs_fchown_fid(file, uid, gid)) {
 			error = errno;
 			goto out;
 		}
 	}
 
 	if (mask & L9PL_SETATTR_SIZE) {
-		/* Truncate follows symlinks, is this OK? */
-		int fd = openat(file->ff_dirfd, file->ff_name, O_RDWR);
-		if (ftruncate(fd, (off_t)req->lr_req.tsetattr.size)) {
+		if (fs_ftruncate_fid(file, (off_t)req->lr_req.tsetattr.size)) {
 			error = errno;
-			(void) close(fd);
 			goto out;
 		}
-		(void) close(fd);
 	}
 
 	if (mask & (L9PL_SETATTR_ATIME | L9PL_SETATTR_MTIME)) {
@@ -2607,8 +2661,7 @@ fs_setattr(void *softc, struct l9p_request *req)
 			}
 		}
 
-		if (utimensat(file->ff_dirfd, file->ff_name, ts,
-		    AT_SYMLINK_NOFOLLOW)) {
+		if (fs_futimens_fid(file, ts)) {
 			error = errno;
 			goto out;
 		}

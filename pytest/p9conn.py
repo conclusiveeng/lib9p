@@ -1779,7 +1779,7 @@ def flags_to_linux_flags(flags):
 
     result = flags & os.O_RDWR
     flags &= ~os.O_RDWR
-    for key, value in flagmap.iteritems():
+    for key, value in flagmap.items():
         if flags & key:
             result |= value
             flags &= ~key

@@ -481,7 +481,7 @@ def more_test_cases(tstate):
             tstate.stop = True
             tc.fail(str(err))
         fset = clnt.uxreaddir(b'/')
-        fset = [i for i in fset if i != '.' and i != '..']
+        fset = [i for i in fset if i != b'.' and i != b'..']
         tc.trace("what's left after removing everything: {0!r}".format(fset))
         if fset:
             tstate.stop = True
@@ -555,7 +555,7 @@ def more_test_cases(tstate):
         fid, _, _, _ = clnt.uxopen(b'/dir/file', os.O_CREAT | os.O_RDWR, 0o666,
             gid=tstate.gid)
         tc.autoclunk(fid)
-        written = clnt.write(fid, 0, 'bytes\n')
+        written = clnt.write(fid, 0, b'bytes\n')
         if written != 6:
             tc.trace('expected to write 6 bytes, actually wrote %d', written,
                      level=logging.WARN)
@@ -594,7 +594,7 @@ def more_test_cases(tstate):
         fid, _, _, _ = clnt.uxopen(b'file', os.O_CREAT | os.O_RDWR,
                                    0o666, startdir=subfid, gid=tstate.gid)
         tc.autoclunk(fid)
-        written = clnt.write(fid, 0, 'filedata\n')
+        written = clnt.write(fid, 0, b'filedata\n')
         if written != 9:
             tc.trace('expected to write 9 bytes, actually wrote %d', written,
                      level=logging.WARN)
